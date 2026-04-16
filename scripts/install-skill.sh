@@ -11,9 +11,9 @@ pick_prefix() {
   fi
   # Prefer user-writable locations on PATH
   local candidates=(
-    "/opt/homebrew/bin"
     "$HOME/.local/bin"
     "$HOME/bin"
+    "/opt/homebrew/bin"
     "/usr/local/bin"
   )
   for dir in "${candidates[@]}"; do
