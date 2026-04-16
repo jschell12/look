@@ -1,4 +1,4 @@
-// Command look is the primary CLI — runs a Claude Code agent against a
+// Command xmuggle is the primary CLI — runs a Claude Code agent against a
 // screenshot to fix code in a target repo.
 package main
 
@@ -11,25 +11,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jschell12/look/internal/ageutil"
-	"github.com/jschell12/look/internal/config"
-	"github.com/jschell12/look/internal/discover"
-	"github.com/jschell12/look/internal/gitqueue"
-	"github.com/jschell12/look/internal/images"
-	"github.com/jschell12/look/internal/prompt"
-	"github.com/jschell12/look/internal/queue"
-	"github.com/jschell12/look/internal/remote"
-	"github.com/jschell12/look/internal/spawn"
+	"github.com/jschell12/xmuggle/internal/ageutil"
+	"github.com/jschell12/xmuggle/internal/config"
+	"github.com/jschell12/xmuggle/internal/discover"
+	"github.com/jschell12/xmuggle/internal/gitqueue"
+	"github.com/jschell12/xmuggle/internal/images"
+	"github.com/jschell12/xmuggle/internal/prompt"
+	"github.com/jschell12/xmuggle/internal/queue"
+	"github.com/jschell12/xmuggle/internal/remote"
+	"github.com/jschell12/xmuggle/internal/spawn"
 )
 
-const usage = `Usage: look [<subcommand>] [flags]
+const usage = `Usage: xmuggle [<subcommand>] [flags]
 
 Main flags:
   --repo  <repo>   GitHub repo (owner/name or URL) or local path
   --img   <name>   Select image by fuzzy match (repeatable)
   --all            Process ALL unprocessed images
   --msg   <msg>    Optional context
-  --list           Show images in ~/.look/ and status
+  --list           Show images in ~/.xmuggle/ and status
   --scan           Ingest ALL images from ~/Desktop (not just screenshots)
 
 Transports:
@@ -41,16 +41,16 @@ Transports:
     --to <host>    recipient hostname (overrides default_recipient)
 
 Subcommands (for --git setup):
-  look queue-init <owner/repo>
-  look init-keys
-  look add-recipient <host> [--pubkey age1...] [--default]
-  look list-recipients
+  xmuggle queue-init <owner/repo>
+  xmuggle init-keys
+  xmuggle add-recipient <host> [--pubkey age1...] [--default]
+  xmuggle list-recipients
 
 Examples:
-  look --repo jschell12/my-app                              # latest screenshot locally
-  look --repo jschell12/my-app --all --msg "fix alignment"  # all pending
-  look --repo jschell12/my-app --remote --git               # encrypted via git
-  look --list
+  xmuggle --repo jschell12/my-app                              # latest screenshot locally
+  xmuggle --repo jschell12/my-app --all --msg "fix alignment"  # all pending
+  xmuggle --repo jschell12/my-app --remote --git               # encrypted via git
+  xmuggle --list
 `
 
 func die(format string, a ...any) {
@@ -150,7 +150,7 @@ func runMain(rawArgs []string) {
 		if err != nil {
 			die("scan: %v", err)
 		}
-		fmt.Printf("Ingested %d image(s) into ~/.look/\n", n)
+		fmt.Printf("Ingested %d image(s) into ~/.xmuggle/\n", n)
 		if a.repo == "" {
 			return
 		}
@@ -166,7 +166,7 @@ func runMain(rawArgs []string) {
 			die("list: %v", err)
 		}
 		if len(imgs) == 0 {
-			fmt.Println("No images in ~/.look/")
+			fmt.Println("No images in ~/.xmuggle/")
 			fmt.Println("Take a screenshot, or run --scan to ingest all images from ~/Desktop.")
 			return
 		}
@@ -176,7 +176,7 @@ func runMain(rawArgs []string) {
 				unprocessed++
 			}
 		}
-		fmt.Printf("%d image(s) in ~/.look/ (%d unprocessed):\n\n", len(imgs), unprocessed)
+		fmt.Printf("%d image(s) in ~/.xmuggle/ (%d unprocessed):\n\n", len(imgs), unprocessed)
 		for _, img := range imgs {
 			status := "pending"
 			if img.IsProcessed {
@@ -199,7 +199,7 @@ func runMain(rawArgs []string) {
 		for _, q := range a.imgs {
 			img, err := images.FindByName(q)
 			if err != nil || img == nil {
-				die("no image matching %q in ~/.look/ (run --list)", q)
+				die("no image matching %q in ~/.xmuggle/ (run --list)", q)
 			}
 			shotPaths = append(shotPaths, img.Path)
 		}
@@ -296,7 +296,7 @@ func runRemoteSSH(shotPaths []string, a *mainArgs) {
 	var taskIDs []string
 	for _, sp := range shotPaths {
 		taskID := queue.NewTaskID()
-		tmpBase := filepath.Join(os.TempDir(), "look-tasks")
+		tmpBase := filepath.Join(os.TempDir(), "xmuggle-tasks")
 		_ = os.MkdirAll(tmpBase, 0o755)
 
 		t := queue.Task{
@@ -329,10 +329,10 @@ func runRemoteGit(shotPaths []string, a *mainArgs) {
 		die("load config: %v", err)
 	}
 	if cfg.Git == nil {
-		die("git transport not configured. Run: look queue-init <owner/repo>")
+		die("git transport not configured. Run: xmuggle queue-init <owner/repo>")
 	}
 	if cfg.Age == nil {
-		die("no age keypair. Run: look init-keys")
+		die("no age keypair. Run: xmuggle init-keys")
 	}
 
 	recipient := a.to
@@ -422,7 +422,7 @@ func pollForResults(taskIDs []string, poll func(string) (*queue.Result, error), 
 
 func cmdQueueInit(args []string) {
 	if len(args) < 1 {
-		die("Usage: look queue-init <owner/repo>")
+		die("Usage: xmuggle queue-init <owner/repo>")
 	}
 	slug := args[0]
 	if !strings.Contains(slug, "/") {
@@ -461,7 +461,7 @@ func cmdQueueInit(args []string) {
 	if cfg.Age != nil {
 		publishOwnPubkey(cfg)
 	} else {
-		fmt.Println("\nNext: look init-keys")
+		fmt.Println("\nNext: xmuggle init-keys")
 	}
 }
 
@@ -504,7 +504,7 @@ func cmdInitKeys() {
 
 	fmt.Printf("\nPublic key: %s\n", pub)
 	fmt.Println("\nShare this pubkey with other machines so they can encrypt to you:")
-	fmt.Printf("  look add-recipient %s --pubkey %s\n", cfg.Hostname, pub)
+	fmt.Printf("  xmuggle add-recipient %s --pubkey %s\n", cfg.Hostname, pub)
 
 	publishOwnPubkey(cfg)
 }
@@ -544,7 +544,7 @@ func publishOwnPubkey(cfg *config.Config) {
 
 func cmdAddRecipient(args []string) {
 	if len(args) < 1 {
-		die("Usage: look add-recipient <hostname> [--pubkey age1...] [--default]")
+		die("Usage: xmuggle add-recipient <hostname> [--pubkey age1...] [--default]")
 	}
 	hostname := args[0]
 	var pubkey string
@@ -575,7 +575,7 @@ func cmdAddRecipient(args []string) {
 		_ = gitqueue.PullRebase(cfg.Git.CloneDir, cfg.Git.Branch)
 		rel := fmt.Sprintf("pubkeys/%s.pub", hostname)
 		if !gitqueue.FileExists(cfg.Git.CloneDir, rel) {
-			die("no pubkey at %s in %s. Ask that machine's owner to run 'look init-keys'.", rel, cfg.Git.QueueRepo)
+			die("no pubkey at %s in %s. Ask that machine's owner to run 'xmuggle init-keys'.", rel, cfg.Git.QueueRepo)
 		}
 		data, err := gitqueue.ReadFile(cfg.Git.CloneDir, rel)
 		if err != nil {

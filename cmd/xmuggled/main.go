@@ -1,4 +1,4 @@
-// Command lookd is the look daemon: watches ~/.look/queue, enqueues tasks to
+// Command xmuggled is the xmuggle daemon: watches ~/.xmuggle/queue, enqueues tasks to
 // agent-queue, spawns workers, and optionally syncs with a private git queue repo.
 package main
 
@@ -15,17 +15,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jschell12/look/internal/aq"
-	"github.com/jschell12/look/internal/config"
-	"github.com/jschell12/look/internal/gitqueue"
-	"github.com/jschell12/look/internal/prompt"
-	"github.com/jschell12/look/internal/queue"
-	"github.com/jschell12/look/internal/spawn"
+	"github.com/jschell12/xmuggle/internal/aq"
+	"github.com/jschell12/xmuggle/internal/config"
+	"github.com/jschell12/xmuggle/internal/gitqueue"
+	"github.com/jschell12/xmuggle/internal/prompt"
+	"github.com/jschell12/xmuggle/internal/queue"
+	"github.com/jschell12/xmuggle/internal/spawn"
 )
 
 var (
 	prURLRE  = regexp.MustCompile(`https://github\.com/[^\s]+/pull/\d+`)
-	branchRE = regexp.MustCompile(`look-fix/\d+`)
+	branchRE = regexp.MustCompile(`xmuggle-fix/\d+`)
 )
 
 func projectName(repo string) string {
@@ -89,7 +89,7 @@ func (d *daemon) enqueueTask(taskDir string) (projectAndRepo [2]string, ok bool)
 		d.logf("aq init %s: %v", project, err)
 		return
 	}
-	title := "look-fix:" + taskID
+	title := "xmuggle-fix:" + taskID
 	desc := t.Message
 	if desc == "" {
 		desc = "Screenshot-driven fix"

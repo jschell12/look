@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jschell12/look/internal/ageutil"
-	"github.com/jschell12/look/internal/config"
+	"github.com/jschell12/xmuggle/internal/ageutil"
+	"github.com/jschell12/xmuggle/internal/config"
 )
 
 type SendArgs struct {
@@ -25,10 +25,10 @@ type SendArgs struct {
 // SendTask encrypts and pushes a task to the queue repo.
 func SendTask(cfg *config.Config, args SendArgs) error {
 	if cfg.Git == nil {
-		return fmt.Errorf("git transport not configured; run: look queue-init <owner/repo>")
+		return fmt.Errorf("git transport not configured; run: xmuggle queue-init <owner/repo>")
 	}
 	if cfg.Age == nil {
-		return fmt.Errorf("no age keypair; run: look init-keys")
+		return fmt.Errorf("no age keypair; run: xmuggle init-keys")
 	}
 
 	recipientHost := args.Recipient
@@ -36,11 +36,11 @@ func SendTask(cfg *config.Config, args SendArgs) error {
 		recipientHost = cfg.DefaultRecipient
 	}
 	if recipientHost == "" {
-		return fmt.Errorf("no recipient specified; run: look add-recipient <host> --default or pass --to <host>")
+		return fmt.Errorf("no recipient specified; run: xmuggle add-recipient <host> --default or pass --to <host>")
 	}
 	recPubkey := cfg.RecipientPubkey(recipientHost)
 	if recPubkey == "" {
-		return fmt.Errorf("no pubkey configured for recipient %q; run: look add-recipient %s", recipientHost, recipientHost)
+		return fmt.Errorf("no pubkey configured for recipient %q; run: xmuggle add-recipient %s", recipientHost, recipientHost)
 	}
 
 	if err := EnsureCloned(cfg.Git.QueueRepo, cfg.Git.CloneDir, cfg.Git.Branch); err != nil {

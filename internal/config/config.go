@@ -1,4 +1,4 @@
-// Package config manages ~/.look directories and the JSON config file.
+// Package config manages ~/.xmuggle directories and the JSON config file.
 package config
 
 import (
@@ -43,7 +43,7 @@ type Config struct {
 	Retention        *Retention  `json:"retention,omitempty"`
 }
 
-// Paths returns commonly used ~/.look paths.
+// Paths returns commonly used ~/.xmuggle paths.
 type Paths struct {
 	ConfigDir    string
 	QueueDir     string
@@ -57,7 +57,7 @@ type Paths struct {
 
 func GetPaths() Paths {
 	home, _ := os.UserHomeDir()
-	root := filepath.Join(home, ".look")
+	root := filepath.Join(home, ".xmuggle")
 	return Paths{
 		ConfigDir:    root,
 		QueueDir:     filepath.Join(root, "queue"),
@@ -70,7 +70,7 @@ func GetPaths() Paths {
 	}
 }
 
-// EnsureDirs creates all the ~/.look subdirectories.
+// EnsureDirs creates all the ~/.xmuggle subdirectories.
 func EnsureDirs() error {
 	p := GetPaths()
 	for _, d := range []string{p.ConfigDir, p.QueueDir, p.ResultsDir, p.LogsDir} {
@@ -102,7 +102,7 @@ func DefaultIdentityPath() string {
 	return filepath.Join(GetPaths().AgeDir, "key.txt")
 }
 
-// Load reads ~/.look/config.json, creating a default if missing.
+// Load reads ~/.xmuggle/config.json, creating a default if missing.
 func Load() (*Config, error) {
 	if err := EnsureDirs(); err != nil {
 		return nil, err
@@ -167,10 +167,10 @@ func (c *Config) SetGit(queueRepo string) {
 		c.Git.Branch = "main"
 	}
 	if c.Git.AuthorName == "" {
-		c.Git.AuthorName = "look bot"
+		c.Git.AuthorName = "xmuggle bot"
 	}
 	if c.Git.AuthorEmail == "" {
-		c.Git.AuthorEmail = "look@localhost"
+		c.Git.AuthorEmail = "xmuggle@localhost"
 	}
 }
 

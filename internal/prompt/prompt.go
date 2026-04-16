@@ -23,13 +23,13 @@ func Build(opts Options) string {
 		shortSlugRE.MatchString(opts.Repo)
 
 	ts := time.Now().UnixMilli()
-	branch := fmt.Sprintf("look-fix/%d", ts)
+	branch := fmt.Sprintf("xmuggle-fix/%d", ts)
 
 	var repoSetup string
 	if isURL {
 		slug := strings.TrimPrefix(opts.Repo, "https://github.com/")
 		repoSetup = fmt.Sprintf(
-			"Clone the repo: git clone https://github.com/%s /tmp/look-%d\ncd /tmp/look-%d",
+			"Clone the repo: git clone https://github.com/%s /tmp/xmuggle-%d\ncd /tmp/xmuggle-%d",
 			slug, ts, ts,
 		)
 	} else {
@@ -90,7 +90,7 @@ gh pr create --title "<concise description of the fix>" --body "## Screenshot an
 <what you changed and why>
 
 ---
-Automated fix by look"
+Automated fix by xmuggle"
 
 Then merge it:
 gh pr merge --squash --auto
@@ -147,7 +147,7 @@ Run this loop until there are no more items to claim:
 
 If claim returns empty or fails, exit successfully.
 
-Parse the JSON to get the item ID and title. Title format: `+"`look-fix:<task-id>`"+`.
+Parse the JSON to get the item ID and title. Title format: `+"`xmuggle-fix:<task-id>`"+`.
 
 ### 3. Read the screenshot
 

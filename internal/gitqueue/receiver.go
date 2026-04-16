@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jschell12/look/internal/ageutil"
-	"github.com/jschell12/look/internal/config"
-	"github.com/jschell12/look/internal/queue"
+	"github.com/jschell12/xmuggle/internal/ageutil"
+	"github.com/jschell12/xmuggle/internal/config"
+	"github.com/jschell12/xmuggle/internal/queue"
 )
 
 func gitLogf(format string, a ...any) {
@@ -34,7 +34,7 @@ func lookupSenderPubkey(cfg *config.Config, sender string) string {
 }
 
 // IngestTick pulls the queue repo, decrypts new tasks addressed to us, and
-// writes them into ~/.look/queue/ in the existing format for the daemon.
+// writes them into ~/.xmuggle/queue/ in the existing format for the daemon.
 func IngestTick(cfg *config.Config) error {
 	if cfg.Git == nil || cfg.Age == nil {
 		return nil

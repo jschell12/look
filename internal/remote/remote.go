@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jschell12/look/internal/queue"
+	"github.com/jschell12/xmuggle/internal/queue"
 )
 
 type Target struct {
@@ -32,14 +32,14 @@ func (t Target) queueDir() string {
 	if t.QueueDir != "" {
 		return t.QueueDir
 	}
-	return "~/.look/queue"
+	return "~/.xmuggle/queue"
 }
 
 func (t Target) resultsDir() string {
 	if t.ResultsDir != "" {
 		return t.ResultsDir
 	}
-	return "~/.look/results"
+	return "~/.xmuggle/results"
 }
 
 func run(name string, args ...string) (stdout, stderr string, code int, err error) {

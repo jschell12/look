@@ -1,4 +1,4 @@
-// Package images manages the ~/.look image store, auto-ingesting screenshots
+// Package images manages the ~/.xmuggle image store, auto-ingesting screenshots
 // from ~/Desktop via macOS Spotlight (kMDItemIsScreenCapture).
 package images
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jschell12/look/internal/config"
+	"github.com/jschell12/xmuggle/internal/config"
 )
 
 var imageExts = map[string]bool{
@@ -30,7 +30,7 @@ func ensureDirAndFiles() error {
 	}
 	for _, f := range []string{trackedFile(), seenFile()} {
 		if _, err := os.Stat(f); os.IsNotExist(err) {
-			if err := os.WriteFile(f, []byte("# Managed by look\n"), 0o644); err != nil {
+			if err := os.WriteFile(f, []byte("# Managed by xmuggle\n"), 0o644); err != nil {
 				return err
 			}
 		}
@@ -127,7 +127,7 @@ func markSeen(src string) error {
 	return appendLine(seenFile(), src)
 }
 
-// ingestCopy copies src into ~/.look/, deduping on name collision.
+// ingestCopy copies src into ~/.xmuggle/, deduping on name collision.
 func ingestCopy(src string) (string, error) {
 	if err := ensureDirAndFiles(); err != nil {
 		return "", err
@@ -213,7 +213,7 @@ func filterUnseen(paths []string, seen map[string]struct{}) []string {
 	return out
 }
 
-// AutoIngest pulls new screenshots from ~/Desktop into ~/.look. Returns count.
+// AutoIngest pulls new screenshots from ~/Desktop into ~/.xmuggle. Returns count.
 func AutoIngest() (int, error) {
 	newShots, err := findNewScreenshots()
 	if err != nil {
@@ -250,7 +250,7 @@ func IngestAll() (int, error) {
 	return count, nil
 }
 
-// storeImages lists images currently in ~/.look with status.
+// storeImages lists images currently in ~/.xmuggle with status.
 func storeImages() ([]Image, error) {
 	if err := ensureDirAndFiles(); err != nil {
 		return nil, err

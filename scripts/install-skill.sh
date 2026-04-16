@@ -48,7 +48,7 @@ pick_prefix() {
     if ! is_on_path "$dir"; then
       continue
     fi
-    # Must come BEFORE /usr/bin so we win over the system `look` utility.
+    # Must come BEFORE /usr/bin so we win over the macOS built-in /usr/bin/look.
     local idx
     idx=$(path_index "$dir")
     if (( idx >= usr_bin_idx )); then
@@ -69,7 +69,7 @@ pick_prefix() {
 
 BIN_DIR="$(pick_prefix)"
 
-echo "=== Installing /look skill + CLI ==="
+echo "=== Installing /xmuggle skill + CLI ==="
 echo "Install dir: $BIN_DIR"
 echo ""
 
@@ -78,7 +78,7 @@ echo "Building..."
 (cd "$REPO_DIR" && make build)
 
 # Install binaries
-for bin in look lookd; do
+for bin in xmuggle xmuggled; do
   src="$REPO_DIR/bin/$bin"
   dst="$BIN_DIR/$bin"
   if [[ -w "$BIN_DIR" ]]; then
@@ -102,33 +102,33 @@ if ! is_on_path "$BIN_DIR"; then
 fi
 
 # Shadow-by-/usr/bin/look check
-ACTUAL="$(command -v look || true)"
-if [[ "$ACTUAL" != "$BIN_DIR/look" ]]; then
+ACTUAL="$(command -v xmuggle || true)"
+if [[ "$ACTUAL" != "$BIN_DIR/xmuggle" ]]; then
   echo ""
-  echo "WARNING: 'look' resolves to $ACTUAL (not $BIN_DIR/look)"
+  echo "WARNING: 'xmuggle' resolves to $ACTUAL (not $BIN_DIR/xmuggle)"
   if [[ "$ACTUAL" == "/usr/bin/look" ]]; then
-    echo "That's the macOS built-in 'look' utility, shadowing ours."
+    echo "That's the macOS built-in 'look' utility, which shadows ours only if $BIN_DIR comes after /usr/bin."
     echo "Fix: put $BIN_DIR earlier on PATH than /usr/bin."
   fi
 fi
 
 # Claude Code skill
 if [[ -d "$HOME/.claude" ]]; then
-  mkdir -p "$HOME/.claude/skills/look"
-  cp "$REPO_DIR/skills/claude/SKILL.md" "$HOME/.claude/skills/look/SKILL.md"
-  echo "  ~/.claude/skills/look/SKILL.md"
+  mkdir -p "$HOME/.claude/skills/xmuggle"
+  cp "$REPO_DIR/skills/claude/SKILL.md" "$HOME/.claude/skills/xmuggle/SKILL.md"
+  echo "  ~/.claude/skills/xmuggle/SKILL.md"
 fi
 
 # Cursor command
 if [[ -d "$HOME/.cursor" ]]; then
   mkdir -p "$HOME/.cursor/commands"
-  cp "$REPO_DIR/skills/cursor/command.md" "$HOME/.cursor/commands/look.md"
-  echo "  ~/.cursor/commands/look.md"
+  cp "$REPO_DIR/skills/cursor/command.md" "$HOME/.cursor/commands/xmuggle.md"
+  echo "  ~/.cursor/commands/xmuggle.md"
 fi
 
 echo ""
-echo "Done! Use /look in Claude Code or Cursor."
+echo "Done! Use /xmuggle in Claude Code or Cursor."
 echo ""
 echo "Quick start:"
-echo "  look --list"
-echo "  look --repo jschell12/my-app"
+echo "  xmuggle --list"
+echo "  xmuggle --repo jschell12/my-app"
