@@ -10,30 +10,33 @@ import { createTaskId, writeTask, type TaskPayload } from "./queue.js";
 import { sendTask, pollForResult } from "./remote.js";
 import {
   findLatestImage,
-  resolveImageArg,
+  ingestFromScanDirs,
   markProcessed,
   listUnprocessed,
+  listAllImages,
 } from "./images.js";
 
-const USAGE = `Usage: screenshot-agent [<screenshot>] --repo <repo> [--msg "context"] [--remote] [--list]
+const USAGE = `Usage: screenshot-agent --repo <repo> [--msg "context"] [--remote] [--list] [--scan]
 
-  <screenshot>   Path to image file or directory containing images.
-                 If omitted, auto-discovers the latest unprocessed image from:
-                   1. ~/Desktop/.screenshot-agent/  (watch dir)
-                   2. ~/Downloads/.screenshot-agent/ (watch dir)
-                   3. ~/Desktop/
-                   4. ~/Downloads/
   --repo <repo>  GitHub repo (owner/name or URL) or local path
   --msg  <msg>   Optional context to guide the agent
   --remote       Send to remote machine for processing (requires 'make setup')
-  --list         List all unprocessed images and exit
+  --list         List all images in ~/.screenshot-agent/ and their status
+  --scan         Scan ~/Desktop and ~/Downloads, move images to ~/.screenshot-agent/
+
+Image discovery:
+  Images are stored in ~/.screenshot-agent/. The latest unprocessed image
+  is automatically selected. Processed images are tracked in ~/.screenshot-agent/.tracked.
+
+  To add images, either:
+    - Run --scan to ingest from ~/Desktop and ~/Downloads
+    - Manually move/copy images into ~/.screenshot-agent/
 
 Examples:
-  screenshot-agent --repo jschell12/my-app
-  screenshot-agent --repo jschell12/my-app --msg "fix the button alignment"
-  screenshot-agent ./bug.png --repo jschell12/my-app
-  screenshot-agent ~/Desktop/.screenshot-agent/ --repo jschell12/my-app
-  screenshot-agent --list`;
+  screenshot-agent --scan                                        # ingest images from Desktop/Downloads
+  screenshot-agent --repo jschell12/my-app                       # fix latest unprocessed image
+  screenshot-agent --repo jschell12/my-app --msg "fix the btn"   # with context
+  screenshot-agent --list                                        # see all images + status`;
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
@@ -43,11 +46,11 @@ function parseArgs(argv: string[]) {
     process.exit(0);
   }
 
-  let screenshot: string | undefined;
   let repo: string | undefined;
   let message: string | undefined;
   let remote = false;
   let list = false;
+  let scan = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -59,60 +62,12 @@ function parseArgs(argv: string[]) {
       remote = true;
     } else if (arg === "--list") {
       list = true;
-    } else if (!arg.startsWith("--") && !screenshot) {
-      screenshot = arg;
+    } else if (arg === "--scan") {
+      scan = true;
     }
   }
 
-  return { screenshot, repo, message, remote, list };
-}
-
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
-
-function validateScreenshot(path: string): string {
-  const abs = resolve(path);
-  if (!existsSync(abs)) {
-    console.error(`Error: screenshot not found: ${abs}`);
-    process.exit(1);
-  }
-  const ext = abs.toLowerCase().split(".").pop();
-  if (!ext || !IMAGE_EXTS.has(ext)) {
-    console.error(`Error: unsupported image format: .${ext}`);
-    process.exit(1);
-  }
-  return abs;
-}
-
-/**
- * Resolve the screenshot argument:
- * - If a file path, validate and return it
- * - If a directory, find latest unprocessed image in it
- * - If omitted, auto-discover from Desktop/Downloads
- */
-function resolveScreenshot(arg?: string): string {
-  if (arg) {
-    // Could be a file or directory
-    const resolved = resolveImageArg(resolve(arg));
-    if (resolved) return validateScreenshot(resolved);
-
-    // Maybe it's just a file path
-    return validateScreenshot(arg);
-  }
-
-  // Auto-discover
-  const found = findLatestImage();
-  if (!found) {
-    console.error("No unprocessed images found in:");
-    console.error("  ~/Desktop/.screenshot-agent/");
-    console.error("  ~/Downloads/.screenshot-agent/");
-    console.error("  ~/Desktop/");
-    console.error("  ~/Downloads/");
-    console.error("\nDrop an image in one of these locations, or specify a path explicitly.");
-    process.exit(1);
-  }
-
-  console.log(`Auto-discovered: ${found.path} (${found.source})`);
-  return found.path;
+  return { repo, message, remote, list, scan };
 }
 
 async function runLocal(
@@ -177,17 +132,27 @@ async function runRemote(
 }
 
 async function main() {
-  const { screenshot, repo, message, remote, list } = parseArgs(process.argv);
+  const { repo, message, remote, list, scan } = parseArgs(process.argv);
 
-  // --list mode: show unprocessed images and exit
+  // --scan: ingest images from Desktop/Downloads into ~/.screenshot-agent/
+  if (scan) {
+    const count = ingestFromScanDirs();
+    console.log(`Ingested ${count} image(s) into ~/.screenshot-agent/`);
+    if (!repo) process.exit(0);
+  }
+
+  // --list: show all images and their status
   if (list) {
-    const images = listUnprocessed();
+    const images = listAllImages();
     if (images.length === 0) {
-      console.log("No unprocessed images found.");
+      console.log("No images in ~/.screenshot-agent/");
+      console.log("Run --scan to ingest from ~/Desktop and ~/Downloads.");
     } else {
-      console.log(`${images.length} unprocessed image(s):\n`);
+      const unprocessed = images.filter((i) => !i.isProcessed).length;
+      console.log(`${images.length} image(s) in ~/.screenshot-agent/ (${unprocessed} unprocessed):\n`);
       for (const img of images) {
-        console.log(`  [${img.source}] ${img.path}`);
+        const status = img.isProcessed ? "done" : "pending";
+        console.log(`  [${status}] ${img.name}`);
       }
     }
     process.exit(0);
@@ -199,9 +164,17 @@ async function main() {
     process.exit(1);
   }
 
-  const screenshotPath = resolveScreenshot(screenshot);
+  // Find latest unprocessed image
+  const found = findLatestImage();
+  if (!found) {
+    console.error("No unprocessed images in ~/.screenshot-agent/");
+    console.error("Run: screenshot-agent --scan   to ingest from Desktop/Downloads");
+    process.exit(1);
+  }
 
-  console.log(`Screenshot: ${screenshotPath}`);
+  const screenshotPath = found.path;
+
+  console.log(`Screenshot: ${found.name}`);
   console.log(`Target repo: ${repo}`);
   if (message) console.log(`Context: ${message}`);
   console.log(`Mode: ${remote ? "remote" : "local"}`);

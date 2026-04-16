@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
   appendFileSync,
@@ -11,44 +12,30 @@ import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
-const PROCESSED_DIR = join(homedir(), ".screenshot-agent-processed");
-const PROCESSED_LOG = join(PROCESSED_DIR, "processed.log");
 
-/** Special watch directories inside ~/Desktop and ~/Downloads */
-const WATCH_DIR_NAME = ".screenshot-agent";
-
-/** All directories to scan for images, in priority order */
-function scanDirs(): string[] {
-  const home = homedir();
-  return [
-    // Special watch directories first (higher priority)
-    join(home, "Desktop", WATCH_DIR_NAME),
-    join(home, "Downloads", WATCH_DIR_NAME),
-    // Then Desktop and Downloads themselves
-    join(home, "Desktop"),
-    join(home, "Downloads"),
-  ];
-}
+/** Central image store — images are moved here from Desktop/Downloads */
+const IMAGE_DIR = join(homedir(), ".screenshot-agent");
+const TRACKED_FILE = join(IMAGE_DIR, ".tracked");
 
 function isImage(filename: string): boolean {
   return IMAGE_EXTS.has(extname(filename).toLowerCase());
 }
 
-/** Ensure the processed tracking directory exists */
-function ensureProcessedDir(): void {
-  mkdirSync(PROCESSED_DIR, { recursive: true });
-  if (!existsSync(PROCESSED_LOG)) {
+/** Ensure ~/.screenshot-agent/ and .tracked exist */
+function ensureImageDir(): void {
+  mkdirSync(IMAGE_DIR, { recursive: true });
+  if (!existsSync(TRACKED_FILE)) {
     writeFileSync(
-      PROCESSED_LOG,
-      "# Processed images — one absolute path per line\n"
+      TRACKED_FILE,
+      "# Tracked processed images — one filename per line\n"
     );
   }
 }
 
-/** Get the set of already-processed image paths */
-function loadProcessed(): Set<string> {
-  ensureProcessedDir();
-  const lines = readFileSync(PROCESSED_LOG, "utf-8").split("\n");
+/** Get the set of already-processed filenames (basenames in ~/.screenshot-agent/) */
+function loadTracked(): Set<string> {
+  ensureImageDir();
+  const lines = readFileSync(TRACKED_FILE, "utf-8").split("\n");
   const set = new Set<string>();
   for (const line of lines) {
     const trimmed = line.trim();
@@ -57,63 +44,91 @@ function loadProcessed(): Set<string> {
   return set;
 }
 
-/** Mark an image as processed */
+/** Mark an image as processed by filename */
 export function markProcessed(absPath: string): void {
-  ensureProcessedDir();
-  appendFileSync(PROCESSED_LOG, absPath + "\n");
+  ensureImageDir();
+  appendFileSync(TRACKED_FILE, basename(absPath) + "\n");
 }
 
-/** List all images in a directory, sorted by mtime descending (newest first) */
-function listImages(dir: string): { path: string; mtime: number }[] {
+/** List images in a directory, sorted by mtime descending (newest first) */
+function listImages(dir: string): { path: string; name: string; mtime: number }[] {
   if (!existsSync(dir)) return [];
   const entries = readdirSync(dir, { withFileTypes: true });
-  const images: { path: string; mtime: number }[] = [];
+  const images: { path: string; name: string; mtime: number }[] = [];
 
   for (const entry of entries) {
     if (!entry.isFile()) continue;
+    if (entry.name.startsWith(".")) continue;
     if (!isImage(entry.name)) continue;
     const fullPath = join(dir, entry.name);
     const stat = statSync(fullPath);
-    images.push({ path: fullPath, mtime: stat.mtimeMs });
+    images.push({ path: fullPath, name: entry.name, mtime: stat.mtimeMs });
   }
 
   return images.sort((a, b) => b.mtime - a.mtime);
 }
 
+/**
+ * Move an image from Desktop/Downloads into ~/.screenshot-agent/.
+ * Returns the new path. If a file with the same name exists, dedup with timestamp.
+ */
+function ingestImage(srcPath: string): string {
+  ensureImageDir();
+  let destName = basename(srcPath);
+  let destPath = join(IMAGE_DIR, destName);
+
+  // Dedup if name collision
+  if (existsSync(destPath)) {
+    const ext = extname(destName);
+    const stem = destName.slice(0, -ext.length);
+    destName = `${stem}-${Date.now()}${ext}`;
+    destPath = join(IMAGE_DIR, destName);
+  }
+
+  renameSync(srcPath, destPath);
+  return destPath;
+}
+
+/**
+ * Scan ~/Desktop and ~/Downloads for new images.
+ * Move any found into ~/.screenshot-agent/.
+ * Returns the count of newly ingested images.
+ */
+export function ingestFromScanDirs(): number {
+  const home = homedir();
+  const scanDirs = [
+    join(home, "Desktop"),
+    join(home, "Downloads"),
+  ];
+
+  let count = 0;
+  for (const dir of scanDirs) {
+    for (const img of listImages(dir)) {
+      ingestImage(img.path);
+      count++;
+    }
+  }
+  return count;
+}
+
 export interface DiscoveredImage {
   path: string;
-  source: "watch-dir" | "desktop" | "downloads";
-  isNew: boolean;
+  name: string;
+  isProcessed: boolean;
 }
 
 /**
- * Find the latest unprocessed image.
- *
- * Priority:
- *   1. ~/Desktop/.screenshot-agent/ (watch dir)
- *   2. ~/Downloads/.screenshot-agent/ (watch dir)
- *   3. ~/Desktop (latest unprocessed)
- *   4. ~/Downloads (latest unprocessed)
- *
- * Returns null if no unprocessed images found.
+ * Find the latest unprocessed image in ~/.screenshot-agent/.
+ * Returns null if none found.
  */
 export function findLatestImage(): DiscoveredImage | null {
-  const processed = loadProcessed();
-  const home = homedir();
+  ensureImageDir();
+  const tracked = loadTracked();
+  const images = listImages(IMAGE_DIR);
 
-  const sources: { dir: string; source: DiscoveredImage["source"] }[] = [
-    { dir: join(home, "Desktop", WATCH_DIR_NAME), source: "watch-dir" },
-    { dir: join(home, "Downloads", WATCH_DIR_NAME), source: "watch-dir" },
-    { dir: join(home, "Desktop"), source: "desktop" },
-    { dir: join(home, "Downloads"), source: "downloads" },
-  ];
-
-  for (const { dir, source } of sources) {
-    const images = listImages(dir);
-    for (const img of images) {
-      if (!processed.has(img.path)) {
-        return { path: img.path, source, isNew: true };
-      }
+  for (const img of images) {
+    if (!tracked.has(img.name)) {
+      return { path: img.path, name: img.name, isProcessed: false };
     }
   }
 
@@ -121,57 +136,23 @@ export function findLatestImage(): DiscoveredImage | null {
 }
 
 /**
- * Find a specific image from a directory path.
- * If the path is a directory, return the latest unprocessed image in it.
- * If the path is a file, return it directly.
+ * List all images in ~/.screenshot-agent/ with their processed status.
  */
-export function resolveImageArg(arg: string): string | null {
-  if (!existsSync(arg)) return null;
+export function listAllImages(): DiscoveredImage[] {
+  ensureImageDir();
+  const tracked = loadTracked();
+  const images = listImages(IMAGE_DIR);
 
-  const stat = statSync(arg);
-  if (stat.isFile()) return arg;
-
-  if (stat.isDirectory()) {
-    const processed = loadProcessed();
-    const images = listImages(arg);
-    for (const img of images) {
-      if (!processed.has(img.path)) return img.path;
-    }
-    return null;
-  }
-
-  return null;
+  return images.map((img) => ({
+    path: img.path,
+    name: img.name,
+    isProcessed: tracked.has(img.name),
+  }));
 }
 
 /**
- * List all unprocessed images across all scan directories.
+ * List unprocessed images only.
  */
 export function listUnprocessed(): DiscoveredImage[] {
-  const processed = loadProcessed();
-  const home = homedir();
-  const result: DiscoveredImage[] = [];
-
-  const sources: { dir: string; source: DiscoveredImage["source"] }[] = [
-    { dir: join(home, "Desktop", WATCH_DIR_NAME), source: "watch-dir" },
-    { dir: join(home, "Downloads", WATCH_DIR_NAME), source: "watch-dir" },
-    { dir: join(home, "Desktop"), source: "desktop" },
-    { dir: join(home, "Downloads"), source: "downloads" },
-  ];
-
-  for (const { dir, source } of sources) {
-    for (const img of listImages(dir)) {
-      if (!processed.has(img.path)) {
-        result.push({ path: img.path, source, isNew: true });
-      }
-    }
-  }
-
-  return result;
-}
-
-/** Ensure the special watch directories exist */
-export function ensureWatchDirs(): void {
-  const home = homedir();
-  mkdirSync(join(home, "Desktop", WATCH_DIR_NAME), { recursive: true });
-  mkdirSync(join(home, "Downloads", WATCH_DIR_NAME), { recursive: true });
+  return listAllImages().filter((img) => !img.isProcessed);
 }
