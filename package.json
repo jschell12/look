@@ -4,11 +4,13 @@
   "description": "CLI that takes a screenshot and spawns a Claude Code agent to fix the issue in a target repo",
   "type": "module",
   "bin": {
-    "screenshot-agent": "./dist/index.js"
+    "screenshot-agent": "./dist/index.js",
+    "screenshot-agent-daemon": "./dist/daemon.js"
   },
   "scripts": {
     "build": "tsup",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "daemon": "tsx src/daemon.ts"
   },
   "author": "jschell12",
   "license": "ISC",
