@@ -1,4 +1,4 @@
-.PHONY: build setup i-wm i-pm daemon-start daemon-stop daemon-logs watcher-start watcher-stop watcher-logs clean
+.PHONY: build setup install i-wm i-pm daemon-start daemon-stop daemon-logs watcher-start watcher-stop watcher-logs clean
 
 DAEMON_PLIST := $(HOME)/Library/LaunchAgents/com.screenshot-agent.daemon.plist
 WATCHER_PLIST := $(HOME)/Library/LaunchAgents/com.screenshot-agent.watcher.plist
@@ -9,7 +9,11 @@ build:
 setup:
 	bash scripts/setup.sh
 
-# Install on work machine (sender + file watcher)
+# Install /look skill + CLI (any machine)
+install: build
+	bash scripts/install-skill.sh
+
+# Install on work machine (sender + file watcher + skill)
 i-wm: build
 	bash scripts/install-wm.sh
 
