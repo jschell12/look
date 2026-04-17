@@ -27,38 +27,62 @@ import (
 	"github.com/jschell12/xmuggle/internal/spawn"
 )
 
-const usage = `Usage: xmuggle [<subcommand>] [flags]
+const usage = `xmuggle — screenshot-driven code fixes
 
-Main flags:
-  --repo  <repo>   GitHub repo (owner/name or URL) or local path
-  --img   <name>   Select image by fuzzy match (repeatable)
-  --all            Process ALL unprocessed images
-  --msg   <msg>    Optional context
-  --list           Show images in ~/.xmuggle/ and status
-  --scan           Ingest ALL images from ~/Desktop (not just screenshots)
+Usage:
+  xmuggle --repo <repo> [--img <name>]... [--all] [--msg "context"] [transport]
+  xmuggle <subcommand> [args]
 
-Transports:
-  (default)        process locally
-  --remote         SSH/rsync to a Mac on the LAN
-    --host <host>  specific hostname (otherwise dns-sd discovery)
-    --user <user>  SSH user (default: $USER)
-  --remote --git   age-encrypted via private GitHub queue repo
-    --to <host>    recipient hostname (overrides default_recipient)
+Process screenshots:
+  --repo  <repo>    Target GitHub repo (owner/name, URL, or local path)
+  --img   <name>    Select image by fuzzy match (repeatable for multi-image)
+  --all             Process ALL unprocessed images
+  --msg   <msg>     Context to guide the agent (what's wrong, what to fix)
+  --list            Show images in ~/.xmuggle/ and their status
+  --scan            Ingest ALL images from ~/Desktop (not just screenshots)
+
+Transport (how to process):
+  (default)         Run a Claude agent locally on this machine
+  --remote          Forward via SSH/rsync to a Mac on the LAN
+    --host <host>     Specific hostname (otherwise Bonjour discovery)
+    --user <user>     SSH user (default: $USER)
+  --remote --git    Forward via age-encrypted private GitHub queue repo
+    --to <host>       Recipient hostname (overrides default_recipient)
 
 Subcommands:
-  xmuggle rec [--duration 30s] [--fps 1] [--format jpg] [--repo <repo>] [--msg <msg>] [transport flags]
-  xmuggle rm <name>... [--all-done]           # remove images from ~/.xmuggle/ by fuzzy name
-  xmuggle init-recv <owner/repo> [--peer <sender>] [--json]    # receiver: setup + daemon
-  xmuggle init-send <owner/repo> [--peer <receiver>] [--json]  # sender: setup
-  xmuggle peers                               # list receivers and senders in the queue repo
-  xmuggle add-recipient <host> [--pubkey age1...] [--default]
-  xmuggle list-recipients
+  rec                Record screen at 1fps, optionally auto-submit
+    --duration <dur>   Recording length (e.g. 30s, 2m). Default: Ctrl+C
+    --fps <N>          Frames per second (default: 1)
+    --format <fmt>     jpg (default) or png
+    --repo/--msg/--remote/--git  Auto-submit after recording
+
+  rm <name>...       Remove images from ~/.xmuggle/
+    --all-done         Remove all processed images
+
+  init-recv <owner/repo>   Set up this machine as a receiver (daemon)
+    --peer <sender>    Cache a sender's pubkey locally
+    --json             Output peer list as JSON (for AI-driven setup)
+
+  init-send <owner/repo>   Set up this machine as a sender
+    --peer <receiver>  Set default recipient + cache pubkey
+    --json             Output peer list as JSON (for AI-driven setup)
+
+  peers              Show registered receivers and senders
+  add-recipient <host> [--pubkey age1...] [--default]
+  list-recipients    Show configured recipients and pubkeys
+
+Image detection:
+  Screenshots are auto-detected from ~/Desktop via macOS Spotlight on
+  every run. No manual step needed — just take a screenshot and go.
+  Use --scan to also ingest non-screenshot images.
 
 Examples:
-  xmuggle --repo jschell12/my-app                              # latest screenshot locally
-  xmuggle --repo jschell12/my-app --all --msg "fix alignment"  # all pending
-  xmuggle --repo jschell12/my-app --remote --git               # encrypted via git
-  xmuggle --list
+  xmuggle --list                                                # what's pending
+  xmuggle --repo jschell12/my-app                               # fix latest screenshot
+  xmuggle --repo jschell12/my-app --all --msg "fix alignment"   # all pending
+  xmuggle --repo jschell12/my-app --remote --git                # encrypted via git
+  xmuggle rec --duration 30s --repo jschell12/my-app --msg "UI glitch demo"
+  xmuggle rm "Screenshot 2026-04-12"                            # clean up old images
 `
 
 func die(format string, a ...any) {
