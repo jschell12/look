@@ -43,7 +43,7 @@ Transports:
 
 Subcommands (for --git setup):
   xmuggle init-recv <owner/repo>             # receiver: setup + install+start daemon
-  xmuggle init-send <owner/repo> [--to <h>]  # sender: setup + optional default recipient
+  xmuggle init-send <owner/repo>             # sender: setup (then: add-recipient)
   xmuggle peers                               # list receivers and senders in the queue repo
   xmuggle add-recipient <host> [--pubkey age1...] [--default]
   xmuggle list-recipients
@@ -527,7 +527,8 @@ func cmdInitRecv(args []string) {
 	fmt.Println()
 	fmt.Println("This machine will now process queue tasks addressed to it.")
 	fmt.Println("Tell senders to run:")
-	fmt.Printf("  xmuggle init-send %s --to %s\n", args[0], mustHostname())
+	fmt.Printf("  xmuggle init-send %s\n", args[0])
+	fmt.Printf("  xmuggle add-recipient %s --default\n", mustHostname())
 }
 
 // publishRoleMarker writes roles/<role>/<hostname> to the queue repo
@@ -550,62 +551,29 @@ func publishRoleMarker(cfg *config.Config, role string) {
 	}
 }
 
-// cmdInitSend sets up this machine as a sender: base init, plus optional
-// default recipient via --to <hostname>.
+// cmdInitSend sets up this machine as a sender: base init + role marker.
+// Recipient selection is a separate step (xmuggle add-recipient).
 func cmdInitSend(args []string) {
 	if len(args) < 1 {
-		die("Usage: xmuggle init-send <owner/repo> [--to <hostname>]")
+		die("Usage: xmuggle init-send <owner/repo>")
 	}
-	slug := args[0]
-
-	var toHost string
-	for i := 1; i < len(args); i++ {
-		if args[i] == "--to" && i+1 < len(args) {
-			toHost = args[i+1]
-			i++
-		}
-	}
-
-	cfg := baseInit(slug)
+	cfg := baseInit(args[0])
 	publishRoleMarker(cfg, "send")
 
 	fmt.Println()
-	if toHost != "" {
-		rel := fmt.Sprintf("pubkeys/%s.pub", toHost)
-		if !gitqueue.FileExists(cfg.Git.CloneDir, rel) {
-			fmt.Fprintf(os.Stderr, "Error: no pubkey at %s in %s\n", rel, cfg.Git.QueueRepo)
-			fmt.Fprintln(os.Stderr, "Ask that machine's owner to run 'xmuggle init-recv <repo>' first.")
-			os.Exit(1)
-		}
-		data, err := gitqueue.ReadFile(cfg.Git.CloneDir, rel)
-		if err != nil {
-			die("read pubkey: %v", err)
-		}
-		pub := strings.TrimSpace(string(data))
-		cfg.UpsertRecipient(config.Recipient{Hostname: toHost, Pubkey: pub})
-		cfg.DefaultRecipient = toHost
-		if err := config.Save(cfg); err != nil {
-			die("save config: %v", err)
-		}
-		fmt.Printf("Default recipient: %s\n", toHost)
-		fmt.Println()
-		fmt.Println("Ready to send. Try:")
-		fmt.Println("  xmuggle --repo <repo> --remote --git --msg \"fix this\"")
-	} else {
-		fmt.Println("Discovered recipients in the queue repo:")
-		printDiscoveredRecipients(cfg)
-		fmt.Println()
-		fmt.Println("Pick one with:")
-		fmt.Println("  xmuggle add-recipient <hostname> --default")
-	}
+	fmt.Println("Discovered receivers in the queue repo:")
+	printDiscoveredRecipients(cfg)
+	fmt.Println()
+	fmt.Println("Pick one with:")
+	fmt.Println("  xmuggle add-recipient <hostname> --default")
 }
 
-// printDiscoveredRecipients lists pubkeys/*.pub in the local clone.
+// printDiscoveredRecipients lists registered receivers in the queue repo.
 func printDiscoveredRecipients(cfg *config.Config) {
-	dir := filepath.Join(cfg.Git.CloneDir, "pubkeys")
+	dir := filepath.Join(cfg.Git.CloneDir, "roles", "recv")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		fmt.Println("  (none found — is the queue repo empty?)")
+		fmt.Println("  (none found — the receiver needs to run 'xmuggle init-recv' first)")
 		return
 	}
 	count := 0
@@ -613,11 +581,10 @@ func printDiscoveredRecipients(cfg *config.Config) {
 		if !e.Type().IsRegular() {
 			continue
 		}
-		if !strings.HasSuffix(e.Name(), ".pub") {
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		host := strings.TrimSuffix(e.Name(), ".pub")
-		fmt.Printf("  - %s\n", host)
+		fmt.Printf("  - %s\n", e.Name())
 		count++
 	}
 	if count == 0 {

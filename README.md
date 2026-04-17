@@ -62,12 +62,13 @@ xmuggle init-recv jschell12/xmuggle-queue
 
 **On the sender** (the Mac submitting tasks, e.g. a VPN-locked work laptop):
 ```bash
-xmuggle init-send jschell12/xmuggle-queue --to <receiver-hostname>
+xmuggle init-send jschell12/xmuggle-queue
 # → clones queue repo, generates age keypair, publishes pubkey,
-#   fetches receiver's pubkey and sets it as the default_recipient
-```
+#   lists registered receivers in the queue repo
 
-Omit `--to` to just set up keys/queue; `init-send` will then list the discovered recipients for you to pick from with `xmuggle add-recipient <host> --default`.
+xmuggle add-recipient <receiver-hostname> --default
+# → fetches the receiver's pubkey from the queue repo and sets it as default_recipient
+```
 
 **Send:**
 ```bash

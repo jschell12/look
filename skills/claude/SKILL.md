@@ -74,4 +74,4 @@ xmuggle --repo <repo> --remote --host mac.local --msg "<message>"
 - For `--remote` (SSH): SSH enabled on the target Mac, daemon running (`make daemon-install`)
 - For `--remote --git`: both machines set up with roles:
   - receiver: `xmuggle init-recv <owner/repo>`  (installs + starts the daemon)
-  - sender:   `xmuggle init-send <owner/repo> --to <receiver-hostname>`
+  - sender:   `xmuggle init-send <owner/repo>`  (then: `xmuggle add-recipient <receiver-host> --default`)
