@@ -106,6 +106,50 @@ xmuggle --repo jschell12/my-app --remote --host macmini.local
 
 Target Mac needs the daemon: `make daemon-install` or `xmuggle init-recv <queue-repo>`.
 
+## Examples
+
+### Local (single machine)
+
+```bash
+xmuggle --list                                               # see pending
+xmuggle --repo jschell12/my-app --msg "fix the button"       # latest screenshot
+xmuggle --repo jschell12/my-app --img bug1 --img bug2        # multi-image, one task
+xmuggle rec --duration 30s --repo jschell12/my-app            # screen record + submit
+```
+
+### Remote (full session — receiver + sender + send)
+
+```bash
+# --- On your personal laptop (receiver) ---
+xmuggle init-recv jschell12/xmuggle-queue
+#   ✓ Queue repo cloned
+#   ✓ Age keypair generated + pubkey published
+#   ✓ Daemon installed and running
+
+# --- On your work laptop (sender) ---
+xmuggle init-send jschell12/xmuggle-queue
+#   ✓ Queue repo cloned
+#   ✓ Age keypair generated + pubkey published
+#   Lists available receivers — pick one:
+xmuggle add-recipient joshs-macbook-pro --default
+
+# --- Now send from the work laptop ---
+xmuggle --repo jschell12/my-app --remote --git --msg "fix the login form"
+xmuggle --repo jschell12/my-app --all --remote --git --msg "fix all pending"
+xmuggle rec --duration 30s --repo jschell12/my-app --remote --git --msg "UI glitch"
+
+# --- Check status ---
+xmuggle peers                                                # who's registered
+xmuggle --list                                               # pending images
+```
+
+### Cleanup
+
+```bash
+xmuggle rm "Screenshot 2026-04-12"                           # remove by name
+xmuggle rm --all-done                                        # remove all processed
+```
+
 ## Image detection
 
 Screenshots are auto-detected from `~/Desktop` via macOS Spotlight (`kMDItemIsScreenCapture`) and copied into `~/.xmuggle/` on every run. No manual step needed — just take a screenshot and go.
