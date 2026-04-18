@@ -1,7 +1,18 @@
-.PHONY: build install install-skill uninstall-tool daemon-install daemon-uninstall daemon-start daemon-stop daemon-logs link clean
+.PHONY: build install install-skill uninstall-tool daemon-install daemon-uninstall daemon-start daemon-stop daemon-logs daemon-wake-schedule daemon-wake-unschedule link clean
 
 DAEMON_PLIST := $(HOME)/Library/LaunchAgents/com.xmuggle.daemon.plist
 INSTALL_PREFIX ?= /usr/local
+
+# Sleep behavior for the daemon.
+#   default — daemon sleeps when the Mac sleeps (normal)
+#   awake   — wrap the daemon in `caffeinate -i` to prevent idle sleep
+SLEEP_MODE ?= default
+
+# Wake-from-sleep schedule (via `pmset repeat wakeorpoweron`). Used by
+# `daemon-wake-schedule`. WAKE_TIMES must be HH:MM:SS; WAKE_DAYS is the pmset
+# weekday mask (MTWRFSU = every day, MTWRF = weekdays only, SU = weekends).
+WAKE_DAYS ?= MTWRFSU
+WAKE_TIMES ?=
 
 build:
 	@mkdir -p bin
@@ -26,9 +37,10 @@ install-skill:
 		echo "  ~/.cursor/commands/xmuggle.md"; \
 	fi
 
-# Install the queue-processing daemon (launchd)
+# Install the queue-processing daemon (launchd).
+# Pass SLEEP_MODE=awake to wrap the daemon in `caffeinate -i`.
 daemon-install: build
-	bash scripts/install-daemon.sh
+	SLEEP_MODE=$(SLEEP_MODE) bash scripts/install-daemon.sh
 
 daemon-uninstall:
 	launchctl unload $(DAEMON_PLIST) 2>/dev/null || true
@@ -42,6 +54,24 @@ daemon-stop:
 
 daemon-logs:
 	tail -f ~/.xmuggle/logs/daemon.stdout.log
+
+# Schedule a daily wake-from-sleep so the daemon can process queued tasks even
+# when the lid is closed / machine is asleep. Uses `pmset repeat wakeorpoweron`,
+# which requires sudo and supports one recurring time per day.
+#
+# Usage: sudo make daemon-wake-schedule WAKE_TIMES=09:00:00 [WAKE_DAYS=MTWRFSU]
+daemon-wake-schedule:
+	@if [ -z "$(WAKE_TIMES)" ]; then \
+		echo "Usage: sudo make daemon-wake-schedule WAKE_TIMES=HH:MM:SS [WAKE_DAYS=MTWRFSU]"; \
+		echo ""; \
+		echo "  WAKE_TIMES   single time of day in 24h HH:MM:SS (pmset repeat limitation)"; \
+		echo "  WAKE_DAYS    weekday mask: MTWRFSU=every day, MTWRF=weekdays, SU=weekends"; \
+		exit 1; \
+	fi
+	sudo pmset repeat wakeorpoweron $(WAKE_DAYS) $(WAKE_TIMES)
+
+daemon-wake-unschedule:
+	sudo pmset repeat cancel
 
 # Interactive LAN discovery + tunnel/push/pull
 link:

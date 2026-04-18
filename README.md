@@ -187,15 +187,39 @@ Remote (git):                         Pulls queue repo every N seconds
   poll for encrypted result           Encrypts + pushes results back
 ```
 
+## Running while the Mac is asleep
+
+When a MacBook sleeps on battery, macOS suspends userland processes — the daemon
+can't poll the queue. Two knobs, both configurable via `make`:
+
+```bash
+# Wrap the daemon in `caffeinate -i` so idle sleep is prevented while it runs.
+# Note: this does NOT keep the Mac awake when the lid is closed on battery —
+# that's system sleep, which no userland process can block.
+make daemon-install SLEEP_MODE=awake
+
+# Schedule a daily wake-from-sleep (uses `pmset repeat wakeorpoweron`, sudo).
+# On wake the daemon drains the queue, then the Mac re-sleeps.
+sudo make daemon-wake-schedule WAKE_TIMES=09:00:00
+sudo make daemon-wake-schedule WAKE_TIMES=12:00:00 WAKE_DAYS=MTWRF
+sudo make daemon-wake-unschedule
+```
+
+`pmset repeat` only supports one recurring time per day; for higher-frequency
+polling, run the receiver on an always-on machine (Mac mini) — that's what the
+remote architecture is designed for.
+
 ## Make targets
 
 | Command | Purpose |
 |---|---|
 | `make install` | Build, install binaries + `/xmuggle` skill |
 | `make install-skill` | Install just the skill files (no build) |
-| `make daemon-install` | Install queue-processing daemon (launchd) |
+| `make daemon-install [SLEEP_MODE=awake]` | Install queue-processing daemon (launchd) |
 | `make daemon-start / -stop / -logs` | Control the daemon |
 | `make daemon-uninstall` | Remove the daemon |
+| `sudo make daemon-wake-schedule WAKE_TIMES=HH:MM:SS` | Schedule daily wake-from-sleep |
+| `sudo make daemon-wake-unschedule` | Cancel the pmset wake schedule |
 | `make link` | Interactive LAN discovery (mac-link.sh) |
 | `make uninstall-tool` | Remove all xmuggle binaries, plists, skills |
 

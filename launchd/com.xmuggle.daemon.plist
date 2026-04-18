@@ -6,7 +6,7 @@
   <string>com.xmuggle.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__DAEMON_BIN__</string>
+__PROGRAM_ARGS__
   </array>
   <key>KeepAlive</key>
   <true/>
