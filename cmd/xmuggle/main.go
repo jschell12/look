@@ -82,6 +82,11 @@ Quick start (local — single machine):
   xmuggle --repo jschell12/my-app --all                         # process all pending
   xmuggle rec --duration 30s --repo jschell12/my-app --msg "UI glitch"
 
+Remote (SSH/rsync — same LAN, no encryption):
+  xmuggle --repo jschell12/my-app --remote                      # Bonjour discovery
+  xmuggle --repo jschell12/my-app --remote --host macmini.local # specific host
+  Target Mac needs: make daemon-install or xmuggle init-recv <queue-repo>
+
 Remote setup (two machines, encrypted via GitHub):
 
   1. Create a private queue repo (once):
