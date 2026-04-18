@@ -24,32 +24,59 @@ Analyze screenshot(s), identify the problem, and fix the code. New screenshots a
    - **Message** (optional): What's wrong, what to fix
    - **Image selection** (optional): Specific image name(s), `--all` for all unprocessed, or omit for latest
 
-2. **See what's available**:
+2. **List available images** (machine-readable):
 
 ```bash
-xmuggle --list
+xmuggle list --json
 ```
 
-3. **Run the fix**:
+Returns a JSON array of images sorted by date (newest first):
+
+```json
+[
+  {
+    "name": "Screenshot 2026-04-18 at 10.30.00 AM.png",
+    "path": "/Users/you/.xmuggle/Screenshot 2026-04-18 at 10.30.00 AM.png",
+    "status": "pending",
+    "mod_time": "2026-04-18T10:30:00-07:00",
+    "mod_time_unix": 1776451800
+  }
+]
+```
+
+3. **Send the fix** (non-interactive — use `--img` for specific images):
 
 ```bash
-# Process locally (default)
-xmuggle --repo <repo> --msg "<message>"
+# Latest unprocessed screenshot (default)
+xmuggle send --repo <repo> --msg "<message>"
 
-# Specific / multiple images
-xmuggle --repo <repo> --img "<name>" [--img "<name2>"] --msg "<message>"
+# Specific image(s) by name (fuzzy match)
+xmuggle send --repo <repo> --img "<name>" [--img "<name2>"] --msg "<message>"
 
 # All unprocessed
-xmuggle --repo <repo> --all --msg "<message>"
+xmuggle send --repo <repo> --all --msg "<message>"
 
-# Forward to another Mac on the LAN (interactive host discovery)
-xmuggle --repo <repo> --remote --msg "<message>"
+# Forward to another Mac on the LAN
+xmuggle send --repo <repo> --remote --msg "<message>"
 
 # Forward to a specific host
-xmuggle --repo <repo> --remote --host mac.local --msg "<message>"
+xmuggle send --repo <repo> --remote --host mac.local --msg "<message>"
+
+# Forward via encrypted git transport
+xmuggle send --repo <repo> --remote --git --msg "<message>"
 ```
 
 4. **Report the result** to the user — mention what was fixed and that they can `git pull` to get changes.
+
+## Agent workflow (recommended)
+
+When acting on behalf of the user, always use non-interactive commands:
+
+1. `xmuggle list --json` — get available images as JSON
+2. Pick the right image(s) based on user intent (latest, specific name, etc.)
+3. `xmuggle send --repo <repo> --img "<name>" --msg "<context>"` — send with explicit `--img`
+
+Never use `--screenshots` (that flag opens an interactive picker for human users).
 
 ## Flags reference
 
@@ -59,12 +86,12 @@ xmuggle --repo <repo> --remote --host mac.local --msg "<message>"
 | `--msg "<text>"` | Context for the agent |
 | `--img "<name>"` | Select specific image (repeatable, fuzzy matches) |
 | `--all` | Process all unprocessed images |
+| `--screenshots` | Interactive picker (human use only, not for agents) |
 | `--remote` | Forward to another Mac via SSH (discovers via Bonjour if no --host) |
 | `--host <host>` | Specific remote hostname (with --remote) |
 | `--user <user>` | SSH user on remote (with --remote) |
 | `--git` | Forward via age-encrypted GitHub queue repo (with --remote) |
 | `--to <host>` | Recipient hostname (with --remote --git) |
-| `--list` | Show all images and status |
 | `--scan` | Ingest ALL images from ~/Desktop |
 
 ## Prerequisites

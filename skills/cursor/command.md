@@ -7,21 +7,36 @@ description: Analyze screenshot(s) to identify bugs or UI issues and fix the cod
 
 Screenshots are auto-detected from ~/Desktop.
 
-## Usage
+## Agent workflow
+
+1. List available images (JSON):
+
+```bash
+xmuggle list --json
+```
+
+Returns a JSON array sorted by date (newest first) with `name`, `path`, `status`, `mod_time`, `mod_time_unix` fields.
+
+2. Send a fix:
 
 ```bash
 # Latest screenshot, local
-xmuggle --repo <repo> --msg "<message>"
+xmuggle send --repo <repo> --msg "<message>"
 
-# Specific images
-xmuggle --repo <repo> --img "<name>" --msg "<message>"
+# Specific images by name (fuzzy match, repeatable)
+xmuggle send --repo <repo> --img "<name>" [--img "<name2>"] --msg "<message>"
 
 # All unprocessed
-xmuggle --repo <repo> --all --msg "<message>"
+xmuggle send --repo <repo> --all --msg "<message>"
 
 # Forward to another Mac on the LAN
-xmuggle --repo <repo> --remote --msg "<message>"
+xmuggle send --repo <repo> --remote --msg "<message>"
+
+# Forward via encrypted git transport
+xmuggle send --repo <repo> --remote --git --msg "<message>"
 ```
+
+Always use `--img` for explicit image selection. Never use `--screenshots` (interactive picker, human-only).
 
 ## First-time pairing (AI-assisted)
 

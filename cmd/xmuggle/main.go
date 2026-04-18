@@ -30,24 +30,31 @@ import (
 const usage = `xmuggle — screenshot-driven code fixes
 
 Usage:
-  xmuggle --repo <repo> [--img <name>]... [--all] [--msg "context"] [transport]
+  xmuggle send --repo <repo> [--screenshots] [--img <name>]... [--all] [--msg "context"] [transport]
+  xmuggle list [--json]
   xmuggle <subcommand> [args]
 
-Process screenshots:
-  --repo  <repo>    Target GitHub repo (owner/name, URL, or local path)
-  --img   <name>    Select image by fuzzy match (repeatable for multi-image)
-  --all             Process ALL unprocessed images
-  --msg   <msg>     Context to guide the agent (what's wrong, what to fix)
-  --list            Show images in ~/.xmuggle/ and their status
-  --scan            Ingest ALL images from ~/Desktop (not just screenshots)
+  xmuggle --repo <repo> [options]           (legacy — same as 'send')
 
-Transport (how to process):
-  (default)         Run a Claude agent locally on this machine
-  --remote          Forward via SSH/rsync to a Mac on the LAN
-    --host <host>     Specific hostname (otherwise Bonjour discovery)
-    --user <user>     SSH user (default: $USER)
-  --remote --git    Forward via age-encrypted private GitHub queue repo
-    --to <host>       Recipient hostname (overrides default_recipient)
+Send (submit screenshots for fixing):
+  send --repo <repo>      Target GitHub repo (owner/name, URL, or local path)
+    --screenshots          Interactive picker: choose 1+ images from a list
+    --img   <name>         Select image by fuzzy match (repeatable for multi-image)
+    --all                  Process ALL unprocessed images
+    --msg   <msg>          Context to guide the agent (what's wrong, what to fix)
+    --scan                 Ingest ALL images from ~/Desktop before selecting
+
+  Transport (how to process):
+    (default)              Run a Claude agent locally on this machine
+    --remote               Forward via SSH/rsync to a Mac on the LAN
+      --host <host>          Specific hostname (otherwise Bonjour discovery)
+      --user <user>          SSH user (default: $USER)
+    --remote --git         Forward via age-encrypted private GitHub queue repo
+      --to <host>            Recipient hostname (overrides default_recipient)
+
+List (view available images):
+  list                     Show images in ~/.xmuggle/ and their status
+  list --json              Machine-readable JSON output (for AI agents)
 
 Subcommands:
   rec                Record screen at 1fps, optionally auto-submit
@@ -78,16 +85,21 @@ Image detection:
 
 Examples:
 
+  Interactive screenshot picker:
+    xmuggle send --repo jschell12/my-app --screenshots           # pick from list
+    xmuggle send --repo jschell12/my-app --screenshots --remote  # pick + send remote
+
   Local (single machine):
-    xmuggle --list                                               # see pending
-    xmuggle --repo jschell12/my-app --msg "fix the button"       # latest screenshot
-    xmuggle --repo jschell12/my-app --img bug1 --img bug2        # multi-image
-    xmuggle --repo jschell12/my-app --all                        # all pending
+    xmuggle list                                                 # see pending
+    xmuggle list --json                                          # JSON for AI agents
+    xmuggle send --repo jschell12/my-app --msg "fix the button"  # latest screenshot
+    xmuggle send --repo jschell12/my-app --img bug1 --img bug2   # multi-image
+    xmuggle send --repo jschell12/my-app --all                   # all pending
     xmuggle rec --duration 30s --repo jschell12/my-app            # screen record
 
   Remote via SSH (same LAN, no encryption):
-    xmuggle --repo jschell12/my-app --remote                     # Bonjour discovery
-    xmuggle --repo jschell12/my-app --remote --host mac.local    # specific host
+    xmuggle send --repo jschell12/my-app --remote                # Bonjour discovery
+    xmuggle send --repo jschell12/my-app --remote --host mac.local
 
   Remote via git (encrypted, works through VPN):
 
@@ -104,9 +116,13 @@ Examples:
     xmuggle add-recipient joshs-macbook-pro --default
 
     # --- Send from the work laptop ---
-    xmuggle --repo jschell12/my-app --remote --git --msg "fix the login form"
+    xmuggle send --repo jschell12/my-app --remote --git --msg "fix the login form"
     xmuggle rec --duration 30s --repo jschell12/my-app --remote --git --msg "UI glitch"
     xmuggle peers                                                # who's registered
+
+  AI agent workflow (Claude Code / Cursor):
+    xmuggle list --json                                          # get images as JSON
+    xmuggle send --repo jschell12/my-app --img "Screenshot 2026-04-18" --msg "fix it"
 
   Cleanup:
     xmuggle rm "Screenshot 2026-04-12"                           # remove by name
@@ -129,6 +145,12 @@ func main() {
 	switch first {
 	case "-h", "--help":
 		fmt.Print(usage)
+		return
+	case "send":
+		runMain(os.Args[2:])
+		return
+	case "list":
+		cmdList(os.Args[2:])
 		return
 	case "init-recv":
 		cmdInitRecv(os.Args[2:])
@@ -158,7 +180,7 @@ func main() {
 
 type mainArgs struct {
 	repo, message, host, user, to string
-	remote, useGit, list, scan, all bool
+	remote, useGit, list, scan, all, screenshots bool
 	imgs []string
 }
 
@@ -206,6 +228,8 @@ func parseMainArgs(args []string) *mainArgs {
 			a.scan = true
 		case "--all":
 			a.all = true
+		case "--screenshots":
+			a.screenshots = true
 		}
 	}
 	return a
@@ -226,33 +250,7 @@ func runMain(rawArgs []string) {
 	}
 
 	if a.list {
-		n, _ := images.AutoIngest()
-		if n > 0 {
-			fmt.Printf("Auto-ingested %d new screenshot(s)\n\n", n)
-		}
-		imgs, err := images.ListAll()
-		if err != nil {
-			die("list: %v", err)
-		}
-		if len(imgs) == 0 {
-			fmt.Println("No images in ~/.xmuggle/")
-			fmt.Println("Take a screenshot, or run --scan to ingest all images from ~/Desktop.")
-			return
-		}
-		unprocessed := 0
-		for _, img := range imgs {
-			if !img.IsProcessed {
-				unprocessed++
-			}
-		}
-		fmt.Printf("%d image(s) in ~/.xmuggle/ (%d unprocessed):\n\n", len(imgs), unprocessed)
-		for _, img := range imgs {
-			status := "pending"
-			if img.IsProcessed {
-				status = "done"
-			}
-			fmt.Printf("  [%s] %s\n", status, img.Name)
-		}
+		cmdList(nil) // legacy --list redirects to list subcommand
 		return
 	}
 
@@ -264,11 +262,13 @@ func runMain(rawArgs []string) {
 
 	var shotPaths []string
 	switch {
+	case a.screenshots:
+		shotPaths = promptSelectScreenshots()
 	case len(a.imgs) > 0:
 		for _, q := range a.imgs {
 			img, err := images.FindByName(q)
 			if err != nil || img == nil {
-				die("no image matching %q in ~/.xmuggle/ (run --list)", q)
+				die("no image matching %q in ~/.xmuggle/ (run 'xmuggle list')", q)
 			}
 			shotPaths = append(shotPaths, img.Path)
 		}
@@ -485,6 +485,165 @@ func pollForResults(taskIDs []string, poll func(string) (*queue.Result, error), 
 	}
 	if failed {
 		os.Exit(1)
+	}
+}
+
+// promptSelectScreenshots shows an interactive numbered list of images (newest
+// first, images only) and lets the user pick one or more by number.
+func promptSelectScreenshots() []string {
+	n, _ := images.AutoIngest()
+	if n > 0 {
+		fmt.Printf("Auto-ingested %d new screenshot(s)\n\n", n)
+	}
+	imgs, err := images.ListAll()
+	if err != nil {
+		die("list: %v", err)
+	}
+	if len(imgs) == 0 {
+		die("No images in ~/.xmuggle/\nTake a screenshot, or run --scan to ingest images from ~/Desktop.")
+	}
+
+	fmt.Printf("Select screenshot(s) to send (newest first):\n\n")
+	for i, img := range imgs {
+		status := "pending"
+		if img.IsProcessed {
+			status = "done"
+		}
+		age := time.Since(img.ModTime).Truncate(time.Second)
+		fmt.Printf("  [%d] %-7s %s  (%s ago)\n", i+1, status, img.Name, age)
+	}
+	fmt.Println()
+	fmt.Print("Enter numbers (e.g. 1 3 5 or 1,3,5 or 1-3): ")
+
+	reader := bufio.NewReader(os.Stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		die("read input: %v", err)
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		die("No selection made.")
+	}
+
+	selected := parseNumberSelection(line, len(imgs))
+	if len(selected) == 0 {
+		die("No valid selection.")
+	}
+
+	var paths []string
+	for _, idx := range selected {
+		paths = append(paths, imgs[idx].Path)
+	}
+	return paths
+}
+
+// parseNumberSelection parses user input like "1 3 5", "1,3,5", "1-3", or
+// combinations like "1,3-5,7" into zero-based indices.
+func parseNumberSelection(input string, max int) []int {
+	// Normalize: replace commas with spaces
+	input = strings.ReplaceAll(input, ",", " ")
+	parts := strings.Fields(input)
+
+	seen := map[int]bool{}
+	var result []int
+
+	for _, part := range parts {
+		if strings.Contains(part, "-") {
+			// Range like "1-3"
+			bounds := strings.SplitN(part, "-", 2)
+			lo, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			hi, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			for n := lo; n <= hi; n++ {
+				idx := n - 1 // zero-based
+				if idx >= 0 && idx < max && !seen[idx] {
+					seen[idx] = true
+					result = append(result, idx)
+				}
+			}
+		} else {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil {
+				continue
+			}
+			idx := n - 1
+			if idx >= 0 && idx < max && !seen[idx] {
+				seen[idx] = true
+				result = append(result, idx)
+			}
+		}
+	}
+	return result
+}
+
+// cmdList shows images in ~/.xmuggle/. With --json, outputs machine-readable JSON.
+func cmdList(args []string) {
+	useJSON := false
+	for _, a := range args {
+		if a == "--json" {
+			useJSON = true
+		}
+	}
+
+	n, _ := images.AutoIngest()
+	if !useJSON && n > 0 {
+		fmt.Printf("Auto-ingested %d new screenshot(s)\n\n", n)
+	}
+	imgs, err := images.ListAll()
+	if err != nil {
+		die("list: %v", err)
+	}
+
+	if useJSON {
+		type jsonImage struct {
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Status      string `json:"status"`
+			ModTime     string `json:"mod_time"`
+			ModTimeUnix int64  `json:"mod_time_unix"`
+		}
+		var out []jsonImage
+		for _, img := range imgs {
+			status := "pending"
+			if img.IsProcessed {
+				status = "done"
+			}
+			out = append(out, jsonImage{
+				Name:        img.Name,
+				Path:        img.Path,
+				Status:      status,
+				ModTime:     img.ModTime.Format(time.RFC3339),
+				ModTimeUnix: img.ModTime.Unix(),
+			})
+		}
+		if out == nil {
+			out = []jsonImage{}
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+
+	if len(imgs) == 0 {
+		fmt.Println("No images in ~/.xmuggle/")
+		fmt.Println("Take a screenshot, or run --scan to ingest all images from ~/Desktop.")
+		return
+	}
+	unprocessed := 0
+	for _, img := range imgs {
+		if !img.IsProcessed {
+			unprocessed++
+		}
+	}
+	fmt.Printf("%d image(s) in ~/.xmuggle/ (%d unprocessed):\n\n", len(imgs), unprocessed)
+	for _, img := range imgs {
+		status := "pending"
+		if img.IsProcessed {
+			status = "done"
+		}
+		fmt.Printf("  [%s] %s\n", status, img.Name)
 	}
 }
 
