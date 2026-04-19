@@ -1,6 +1,6 @@
 // Package images tracks screenshots on ~/Desktop via a JSON index stored
-// in ~/.xmuggle/images.json.  Images are never copied — they stay on the
-// Desktop and are referenced by their original path.
+// in <repo>/.xmuggle/images.json. Images are never copied — they stay on
+// the Desktop and are referenced by their original path.
 package images
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jschell12/xmuggle/internal/config"
+	"github.com/jschell12/xmuggle/internal/gitops"
 )
 
 var imageExts = map[string]bool{
@@ -27,26 +28,25 @@ func isImage(name string) bool {
 // JSON index
 // ────────────────────────────────────────────────────────────────────
 
-func indexPath() string {
-	return filepath.Join(config.GetPaths().ConfigDir, "images.json")
+func indexPath(repoRoot string) string {
+	return config.GetRepoPaths(repoRoot).ImagesFile
 }
 
 // ImageEntry is a single tracked image.
 type ImageEntry struct {
-	Name        string    `json:"name"`
-	Status      string    `json:"status"` // "pending" or "done"
-	FirstSeen   time.Time `json:"first_seen"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"` // "pending" or "done"
+	FirstSeen   time.Time  `json:"first_seen"`
 	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 }
 
-// imageIndex is the on-disk format.
 type imageIndex struct {
 	Images map[string]*ImageEntry `json:"images"` // key = absolute path
 }
 
-func loadIndex() (*imageIndex, error) {
+func loadIndex(repoRoot string) (*imageIndex, error) {
 	idx := &imageIndex{Images: make(map[string]*ImageEntry)}
-	data, err := os.ReadFile(indexPath())
+	data, err := os.ReadFile(indexPath(repoRoot))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return idx, nil
@@ -62,15 +62,15 @@ func loadIndex() (*imageIndex, error) {
 	return idx, nil
 }
 
-func saveIndex(idx *imageIndex) error {
-	if err := config.EnsureDirs(); err != nil {
+func saveIndex(repoRoot string, idx *imageIndex) error {
+	if err := config.EnsureRepoDirs(repoRoot); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(idx, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(indexPath(), data, 0o644)
+	return os.WriteFile(indexPath(repoRoot), data, 0o644)
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -78,10 +78,10 @@ func saveIndex(idx *imageIndex) error {
 // ────────────────────────────────────────────────────────────────────
 
 func desktopDir() string {
-	return filepath.Join(config.GetPaths().Home, "Desktop")
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "Desktop")
 }
 
-// desktopImages returns all image files on ~/Desktop sorted newest-first.
 func desktopImages() ([]Image, error) {
 	return listDirImages(desktopDir())
 }
@@ -96,25 +96,14 @@ func listDirImages(dir string) ([]Image, error) {
 	}
 	var out []Image
 	for _, e := range entries {
-		// Accept regular files and ModeIrregular (iCloud-evicted "dataless"
-		// files on macOS with Desktop & Documents sync).
 		typ := e.Type()
 		if !typ.IsRegular() && typ&os.ModeIrregular == 0 {
 			continue
 		}
-
-		name := e.Name()
-
-		// iCloud-evicted files are renamed to ".OriginalName.icloud".
-		// Recover the real filename so the image-extension check works.
-		if strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".icloud") {
-			name = strings.TrimPrefix(name, ".")
-			name = strings.TrimSuffix(name, ".icloud")
-		} else if strings.HasPrefix(name, ".") {
-			continue // normal hidden file
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
 		}
-
-		if !isImage(name) {
+		if !isImage(e.Name()) {
 			continue
 		}
 		fi, err := e.Info()
@@ -123,7 +112,7 @@ func listDirImages(dir string) ([]Image, error) {
 		}
 		out = append(out, Image{
 			Path:    filepath.Join(dir, e.Name()),
-			Name:    name,
+			Name:    e.Name(),
 			ModTime: fi.ModTime(),
 		})
 	}
@@ -132,22 +121,18 @@ func listDirImages(dir string) ([]Image, error) {
 }
 
 // ────────────────────────────────────────────────────────────────────
-// Sync: merge Desktop state into the index
+// Sync
 // ────────────────────────────────────────────────────────────────────
 
-// Sync discovers images on ~/Desktop and adds new ones to the index.
-// Existing entries are preserved.  Returns count of newly added images.
-func Sync() (int, error) {
-	idx, err := loadIndex()
+func Sync(repoRoot string) (int, error) {
+	idx, err := loadIndex(repoRoot)
 	if err != nil {
 		return 0, err
 	}
-
 	imgs, err := desktopImages()
 	if err != nil {
 		return 0, err
 	}
-
 	now := time.Now()
 	count := 0
 	for _, img := range imgs {
@@ -161,15 +146,12 @@ func Sync() (int, error) {
 		}
 		count++
 	}
-
-	// Prune entries whose files no longer exist on Desktop
 	for p := range idx.Images {
 		if _, err := os.Stat(p); os.IsNotExist(err) {
 			delete(idx.Images, p)
 		}
 	}
-
-	if err := saveIndex(idx); err != nil {
+	if err := saveIndex(repoRoot, idx); err != nil {
 		return 0, err
 	}
 	return count, nil
@@ -179,7 +161,6 @@ func Sync() (int, error) {
 // Public API
 // ────────────────────────────────────────────────────────────────────
 
-// Image describes an entry visible to callers.
 type Image struct {
 	Path        string
 	Name        string
@@ -187,16 +168,25 @@ type Image struct {
 	ModTime     time.Time
 }
 
-// ListAll syncs and returns all tracked images (newest first).
-func ListAll() ([]Image, error) {
-	if _, err := Sync(); err != nil {
-		return nil, err
+func mustRepoRoot() string {
+	root, err := gitops.FindRepoRoot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "not in a git repo")
+		os.Exit(1)
 	}
-	return indexedImages()
+	return root
 }
 
-func indexedImages() ([]Image, error) {
-	idx, err := loadIndex()
+func ListAll() ([]Image, error) {
+	root := mustRepoRoot()
+	if _, err := Sync(root); err != nil {
+		return nil, err
+	}
+	return indexedImages(root)
+}
+
+func indexedImages(repoRoot string) ([]Image, error) {
+	idx, err := loadIndex(repoRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +194,7 @@ func indexedImages() ([]Image, error) {
 	for p, entry := range idx.Images {
 		fi, err := os.Stat(p)
 		if err != nil {
-			continue // file gone
+			continue
 		}
 		out = append(out, Image{
 			Path:        p,
@@ -217,12 +207,12 @@ func indexedImages() ([]Image, error) {
 	return out, nil
 }
 
-// Latest returns the newest unprocessed image after syncing.
 func Latest() (*Image, error) {
-	if _, err := Sync(); err != nil {
+	root := mustRepoRoot()
+	if _, err := Sync(root); err != nil {
 		return nil, err
 	}
-	imgs, err := indexedImages()
+	imgs, err := indexedImages(root)
 	if err != nil {
 		return nil, err
 	}
@@ -234,12 +224,12 @@ func Latest() (*Image, error) {
 	return nil, nil
 }
 
-// AllUnprocessed returns every unprocessed image, newest first.
 func AllUnprocessed() ([]Image, error) {
-	if _, err := Sync(); err != nil {
+	root := mustRepoRoot()
+	if _, err := Sync(root); err != nil {
 		return nil, err
 	}
-	imgs, err := indexedImages()
+	imgs, err := indexedImages(root)
 	if err != nil {
 		return nil, err
 	}
@@ -252,24 +242,21 @@ func AllUnprocessed() ([]Image, error) {
 	return out, nil
 }
 
-// FindByName resolves a fuzzy query to a single image after syncing.
 func FindByName(query string) (*Image, error) {
-	if _, err := Sync(); err != nil {
+	root := mustRepoRoot()
+	if _, err := Sync(root); err != nil {
 		return nil, err
 	}
-	imgs, err := indexedImages()
+	imgs, err := indexedImages(root)
 	if err != nil {
 		return nil, err
 	}
 	q := strings.ToLower(query)
-
-	// exact
 	for _, img := range imgs {
 		if img.Name == query {
 			return &img, nil
 		}
 	}
-	// prefix
 	var prefix []Image
 	for _, img := range imgs {
 		if strings.HasPrefix(strings.ToLower(img.Name), q) {
@@ -279,7 +266,6 @@ func FindByName(query string) (*Image, error) {
 	if len(prefix) == 1 {
 		return &prefix[0], nil
 	}
-	// substring, newest wins
 	for _, img := range imgs {
 		if strings.Contains(strings.ToLower(img.Name), q) {
 			return &img, nil
@@ -288,32 +274,27 @@ func FindByName(query string) (*Image, error) {
 	return nil, nil
 }
 
-// MarkProcessed marks an image as done, deletes the file from Desktop,
-// and removes it from the tracking index.
 func MarkProcessed(absPath string) error {
+	root := mustRepoRoot()
 	_ = os.Remove(absPath)
-
-	idx, err := loadIndex()
+	idx, err := loadIndex(root)
 	if err != nil {
 		return err
 	}
 	delete(idx.Images, absPath)
-	return saveIndex(idx)
+	return saveIndex(root, idx)
 }
 
-// Remove removes an image from the tracking index (does NOT delete the
-// file from Desktop).
 func Remove(absPath string) error {
-	idx, err := loadIndex()
+	root := mustRepoRoot()
+	idx, err := loadIndex(root)
 	if err != nil {
 		return err
 	}
 	delete(idx.Images, absPath)
-	return saveIndex(idx)
+	return saveIndex(root, idx)
 }
 
-// RemoveByName fuzzy-matches and removes a single image from tracking.
-// Returns the filename that was removed.
 func RemoveByName(query string) (string, error) {
 	img, err := FindByName(query)
 	if err != nil {
@@ -328,10 +309,9 @@ func RemoveByName(query string) (string, error) {
 	return img.Name, nil
 }
 
-// RemoveAllDone removes every processed image from tracking.
-// Returns the list of removed filenames.
 func RemoveAllDone() ([]string, error) {
-	idx, err := loadIndex()
+	root := mustRepoRoot()
+	idx, err := loadIndex(root)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +323,7 @@ func RemoveAllDone() ([]string, error) {
 		removed = append(removed, entry.Name)
 		delete(idx.Images, p)
 	}
-	if err := saveIndex(idx); err != nil {
+	if err := saveIndex(root, idx); err != nil {
 		return nil, err
 	}
 	return removed, nil

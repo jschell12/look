@@ -14,23 +14,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jschell12/xmuggle/internal/ageutil"
 	"github.com/jschell12/xmuggle/internal/config"
 	"github.com/jschell12/xmuggle/internal/daemoninstall"
-	"github.com/jschell12/xmuggle/internal/discover"
-	"github.com/jschell12/xmuggle/internal/gitqueue"
+	"github.com/jschell12/xmuggle/internal/gitops"
 	"github.com/jschell12/xmuggle/internal/images"
 	"github.com/jschell12/xmuggle/internal/prompt"
 	"github.com/jschell12/xmuggle/internal/queue"
 	"github.com/jschell12/xmuggle/internal/record"
-	"github.com/jschell12/xmuggle/internal/remote"
 	"github.com/jschell12/xmuggle/internal/spawn"
 )
 
 const usage = `xmuggle — screenshot-driven code fixes
 
 Usage:
-  xmuggle send [--screenshots] [--img <name>]... [--all] [--msg "context"] [transport]
+  xmuggle send [--screenshots] [--img <name>]... [--all] [--msg "context"]
   xmuggle list [--json]
   xmuggle <subcommand> [args]
 
@@ -40,88 +37,46 @@ Send (submit screenshots for fixing):
     --img   <name>         Select image by fuzzy match (repeatable for multi-image)
     --all                  Process ALL unprocessed images
     --msg   <msg>          Context to guide the agent (what's wrong, what to fix)
-    (screenshots are tracked automatically from ~/Desktop)
-    --to <host>            Override recipient (when using git transport)
-
-  Transport is auto-detected from config:
-    If init-send/init-recv was run  →  git (encrypted, via queue repo)
-    Otherwise                       →  local (runs agent in current repo)
-    --remote                           Override: SSH/rsync to a LAN Mac
-      --host <host>                      Specific hostname (otherwise Bonjour)
-      --user <user>                      SSH user (default: $USER)
 
 List (view available images):
-  list                     Show images in ~/.xmuggle/ and their status
+  list                     Show tracked Desktop images and their status
   list --json              Machine-readable JSON output (for AI agents)
 
 Subcommands:
+  init               Set up xmuggle in the current git repo
+                     Creates .xmuggle/ directory, registers peer, installs daemon
+
+  peers              Show registered peers for this repo
+
   rec                Record screen at 1fps, optionally auto-submit
     --duration <dur>   Recording length (e.g. 30s, 2m). Default: Ctrl+C
     --fps <N>          Frames per second (default: 1)
     --format <fmt>     jpg (default) or png
-    --repo/--msg/--remote/--git  Auto-submit after recording
 
-  rm <name>...       Remove images from ~/.xmuggle/
+  rm <name>...       Remove images from tracking
     --all-done         Remove all processed images
 
-  init <owner/repo>        Register this machine with the queue repo
-                           From a git repo: registers as receiver + installs daemon
-                           Otherwise: registers as sender
-    --peer <host>      Cache a peer's pubkey (set default recipient for senders)
-    --json             Output peer list as JSON (for AI-driven setup)
-
-  peers              Show registered receivers and senders
-  add-recipient <host> [--pubkey age1...] [--default]
-  list-recipients    Show configured recipients and pubkeys
-
 Image detection:
-  Screenshots are auto-detected from ~/Desktop via macOS Spotlight on
-  every run. No manual step needed — just take a screenshot and go.
-  Tracked images are stored in ~/.xmuggle/images.json.
+  Screenshots are auto-detected from ~/Desktop on every run.
+  Tracked images are stored in .xmuggle/images.json (per-repo).
 
 Examples:
 
-  Local (no init — run from inside the repo):
-    xmuggle list                                                 # see pending
+  One-time setup (run from inside the repo on each machine):
     cd ~/dev/my-app
-    xmuggle send --msg "fix the button"                          # latest screenshot
-    xmuggle send --screenshots                                   # pick from list
-    xmuggle send --img bug1 --img bug2                           # multi-image
-    xmuggle send --all                                           # all pending
+    xmuggle init
 
-  Remote via git (encrypted, works through VPN):
+  Send screenshots:
+    xmuggle send --msg "fix the button"                    # latest screenshot
+    xmuggle send --screenshots                             # pick from list
+    xmuggle send --img bug1 --img bug2                     # multi-image
+    xmuggle send --all                                     # all pending
 
-    # --- One-time setup ---
-    gh repo create jschell12/xmuggle-queue --private             # create queue repo
-
-    # --- On your personal laptop (receiver) ---
-    cd ~/dev/my-app                                              # a git repo
-    xmuggle init jschell12/xmuggle-queue
-    #   ✓ Detected git repo → registered as receiver
-    #   ✓ Daemon installed and running
-
-    # --- On your work laptop (sender) ---
-    xmuggle init jschell12/xmuggle-queue
-    #   ✓ Not in a git repo → registered as sender
-    #   ✓ Select receiver from discovered peers
-
-    # --- Send from the work laptop ---
-    xmuggle send --screenshots                                   # select receiver+repo
-    xmuggle send --msg "fix the login form"                      # latest screenshot
-    xmuggle peers                                                # who's registered
-
-  Remote via SSH (same LAN, override transport):
-    cd ~/dev/my-app
-    xmuggle send --remote                                        # Bonjour discovery
-    xmuggle send --remote --host mac.local
-
-  AI agent workflow (Claude Code / Cursor):
-    xmuggle list --json                                          # get images as JSON
-    xmuggle send --repo jschell12/my-app --img "Screenshot 2026-04-18" --msg "fix it"
-
-  Cleanup:
-    xmuggle rm "Screenshot 2026-04-12"                           # remove by name
-    xmuggle rm --all-done                                        # remove all processed
+  Other:
+    xmuggle list                                           # see pending
+    xmuggle peers                                          # who's registered
+    xmuggle rm "Screenshot 2026-04-12"                     # remove by name
+    xmuggle rm --all-done                                  # remove all processed
 `
 
 func die(format string, a ...any) {
@@ -129,68 +84,118 @@ func die(format string, a ...any) {
 	os.Exit(1)
 }
 
+func mustRepoRoot() string {
+	root, err := gitops.FindRepoRoot()
+	if err != nil {
+		die("not in a git repo; cd into a repo first")
+	}
+	return root
+}
+
+func mustHostname() string {
+	h, _ := os.Hostname()
+	return config.NormalizeHostname(h)
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		// No args means: use default behavior (like --list-ish?). Keep it explicit.
 		fmt.Print(usage)
 		os.Exit(0)
 	}
 
-	first := os.Args[1]
-	switch first {
+	switch os.Args[1] {
 	case "-h", "--help":
 		fmt.Print(usage)
-		return
 	case "send":
-		runMain(os.Args[2:])
-		return
+		cmdSend(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
-		return
 	case "init":
-		cmdInit(os.Args[2:])
-		return
-	case "init-recv":
-		cmdInitRecv(os.Args[2:])
-		return
-	case "init-send":
-		cmdInitSend(os.Args[2:])
-		return
+		cmdInit()
 	case "peers":
 		cmdPeers()
-		return
 	case "rm":
 		cmdRm(os.Args[2:])
-		return
 	case "rec":
 		cmdRec(os.Args[2:])
-		return
-	case "add-recipient":
-		cmdAddRecipient(os.Args[2:])
-		return
-	case "list-recipients":
-		cmdListRecipients()
-		return
+	default:
+		// Try as send with implicit args
+		cmdSend(os.Args[1:])
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────
+// init
+// ────────────────────────────────────────────────────────────────────
+
+func cmdInit() {
+	repoRoot := mustRepoRoot()
+	hostname := mustHostname()
+
+	// Create .xmuggle/ directories
+	if err := config.EnsureRepoDirs(repoRoot); err != nil {
+		die("create .xmuggle/: %v", err)
 	}
 
-	runMain(os.Args[1:])
+	// Write config
+	cfg := &config.Config{Version: 1, Hostname: hostname}
+	if err := config.Save(repoRoot, cfg); err != nil {
+		die("save config: %v", err)
+	}
+
+	// Write peer marker
+	p := config.GetRepoPaths(repoRoot)
+	peerFile := filepath.Join(p.PeersDir, hostname)
+	if err := os.WriteFile(peerFile, []byte(""), 0o644); err != nil {
+		die("write peer marker: %v", err)
+	}
+
+	// Write .xmuggle/.gitignore
+	gitignore := filepath.Join(p.Root, ".gitignore")
+	if err := os.WriteFile(gitignore, []byte("images.json\nconfig.json\n"), 0o644); err != nil {
+		die("write .gitignore: %v", err)
+	}
+
+	// Commit and push
+	fmt.Println("Registering peer:", hostname)
+	err := gitops.CommitAndPush(repoRoot, []string{".xmuggle/"}, fmt.Sprintf("xmuggle: register %s", hostname))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: could not push: %v\n", err)
+	}
+
+	// Register repo with daemon
+	if err := config.RegisterRepo(repoRoot); err != nil {
+		die("register repo: %v", err)
+	}
+
+	// Install daemon
+	fmt.Println("Installing daemon...")
+	if err := daemoninstall.Install(); err != nil {
+		fmt.Fprintf(os.Stderr, "note: daemon install failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Fallback: run `make daemon-install` from the xmuggle repo.")
+	} else {
+		fmt.Println("Daemon installed and running.")
+	}
+
+	fmt.Println()
+	fmt.Println("Done! Run `xmuggle init` from any other machine that has this repo cloned.")
 }
 
-type mainArgs struct {
-	repo, message, host, user, to string
-	remote, useGit, list, all, screenshots bool
-	imgs []string
+// ────────────────────────────────────────────────────────────────────
+// send
+// ────────────────────────────────────────────────────────────────────
+
+type sendArgs struct {
+	message     string
+	imgs        []string
+	all         bool
+	screenshots bool
 }
 
-func parseMainArgs(args []string) *mainArgs {
-	a := &mainArgs{}
+func parseSendArgs(args []string) *sendArgs {
+	a := &sendArgs{}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--repo":
-			i++
-			if i < len(args) {
-				a.repo = args[i]
-			}
 		case "--msg":
 			i++
 			if i < len(args) {
@@ -201,72 +206,25 @@ func parseMainArgs(args []string) *mainArgs {
 			if i < len(args) {
 				a.imgs = append(a.imgs, args[i])
 			}
-		case "--host":
-			i++
-			if i < len(args) {
-				a.host = args[i]
-			}
-		case "--user":
-			i++
-			if i < len(args) {
-				a.user = args[i]
-			}
-		case "--to":
-			i++
-			if i < len(args) {
-				a.to = args[i]
-			}
-		case "--remote":
-			a.remote = true
-		case "--git":
-			a.useGit = true
-		case "--list":
-			a.list = true
 		case "--all":
 			a.all = true
 		case "--screenshots":
 			a.screenshots = true
+		case "--list":
+			cmdList(nil)
+			os.Exit(0)
 		}
 	}
 	return a
 }
 
-func runMain(rawArgs []string) {
-	a := parseMainArgs(rawArgs)
+func cmdSend(rawArgs []string) {
+	a := parseSendArgs(rawArgs)
+	repoRoot := mustRepoRoot()
+	hostname := mustHostname()
+	p := config.GetRepoPaths(repoRoot)
 
-	if a.list {
-		cmdList(nil) // legacy --list redirects to list subcommand
-		return
-	}
-
-	// Auto-detect transport from config: if init-send/init-recv was run,
-	// default to git transport without needing --remote --git.
-	if !a.remote && !a.useGit {
-		cfg, _ := config.Load()
-		if cfg != nil && cfg.Git != nil && cfg.Age != nil {
-			a.useGit = true
-		}
-	}
-
-	// For local/SSH: auto-detect repo from cwd if not given.
-	if a.repo == "" && !a.useGit {
-		remote, repoPath, ok := detectGitRepo()
-		if !ok {
-			die("not in a git repo and no --repo given; cd into a repo or pass --repo")
-		}
-		if a.remote {
-			// SSH mode needs a clone-able slug
-			if remote == "" {
-				die("git repo has no remote; pass --repo")
-			}
-			a.repo = remoteToSlug(remote)
-		} else {
-			// Local mode uses the local path
-			a.repo = repoPath
-		}
-		fmt.Printf("Detected repo: %s\n", a.repo)
-	}
-
+	// Select screenshots
 	var shotPaths []string
 	switch {
 	case a.screenshots:
@@ -275,7 +233,7 @@ func runMain(rawArgs []string) {
 		for _, q := range a.imgs {
 			img, err := images.FindByName(q)
 			if err != nil || img == nil {
-				die("no image matching %q in ~/.xmuggle/ (run 'xmuggle list')", q)
+				die("no image matching %q (run 'xmuggle list')", q)
 			}
 			shotPaths = append(shotPaths, img.Path)
 		}
@@ -303,308 +261,166 @@ func runMain(rawArgs []string) {
 	}
 
 	var names []string
-	for _, p := range shotPaths {
-		names = append(names, filepath.Base(p))
+	for _, sp := range shotPaths {
+		names = append(names, filepath.Base(sp))
 	}
 	fmt.Printf("Screenshot(s): %s\n", strings.Join(names, ", "))
-	if a.repo != "" {
-		fmt.Printf("Target repo: %s\n", a.repo)
-	}
+
+	// Find peers
+	target := selectPeer(p.PeersDir, hostname)
+	fmt.Printf("Target peer: %s\n", target)
 	if a.message != "" {
 		fmt.Printf("Context: %s\n", a.message)
 	}
-	mode := "local"
-	if a.useGit {
-		mode = "remote (git)"
-	} else if a.remote {
-		mode = "remote (ssh)"
-	}
-	fmt.Printf("Mode: %s\n---\n", mode)
 
-	switch {
-	case a.useGit:
-		runRemoteGit(shotPaths, a)
-	case a.remote:
-		runRemoteSSH(shotPaths, a)
-	default:
-		runLocal(shotPaths, a)
-	}
-}
-
-func runLocal(shotPaths []string, a *mainArgs) {
-	p := prompt.Build(prompt.Options{
-		ScreenshotPaths: shotPaths,
-		Repo:            a.repo,
-		Message:         a.message,
-	})
-	code, err := spawn.Interactive(p, "")
-	if err != nil {
-		die("%v", err)
-	}
-	for _, sp := range shotPaths {
-		_ = images.MarkProcessed(sp)
-	}
-	os.Exit(code)
-}
-
-func runRemoteSSH(shotPaths []string, a *mainArgs) {
-	host := a.host
-	if host == "" {
-		fmt.Println("Discovering Macs on the LAN...")
-		svcs, err := discover.DiscoverAll(4 * time.Second)
-		if err != nil || len(svcs) == 0 {
-			die("no Macs discovered. Pass --host <hostname>")
-		}
-		fmt.Println("Discovered SSH hosts:")
-		for i, s := range svcs {
-			fmt.Printf("  [%d] %s -> %s\n", i+1, s.Instance, s.Host)
-		}
-		fmt.Print("Choose target: ")
-		var choice int
-		_, _ = fmt.Scanln(&choice)
-		if choice < 1 || choice > len(svcs) {
-			die("invalid choice")
-		}
-		host = svcs[choice-1].Host
+	// Detect repo slug from remote
+	remoteURL := gitops.RemoteURL(repoRoot)
+	repoSlug := repoRoot
+	if remoteURL != "" {
+		repoSlug = remoteToSlug(remoteURL)
 	}
 
-	target := remote.Target{Host: host, User: a.user}
-	fmt.Printf("Remote: %s\n", host)
-
+	// Write task
 	taskID := queue.NewTaskID()
-	tmpBase := filepath.Join(os.TempDir(), "xmuggle-tasks")
-	_ = os.MkdirAll(tmpBase, 0o755)
-
 	t := queue.Task{
-		Repo:      a.repo,
+		Repo:      repoSlug,
 		Message:   a.message,
 		Timestamp: time.Now().UnixMilli(),
 		Status:    queue.StatusPending,
+		Target:    target,
+		Sender:    hostname,
 	}
 
 	var taskDir string
 	var err error
 	if len(shotPaths) == 1 {
-		taskDir, err = queue.WriteTask(tmpBase, taskID, t, shotPaths[0])
+		taskDir, err = queue.WriteTask(p.QueueDir, taskID, t, shotPaths[0])
 	} else {
-		taskDir, err = queue.WriteTaskMulti(tmpBase, taskID, t, shotPaths)
+		taskDir, err = queue.WriteTaskMulti(p.QueueDir, taskID, t, shotPaths)
 	}
 	if err != nil {
 		die("write task: %v", err)
 	}
-	fmt.Printf("Sending task %s (%d image(s))...\n", taskID, len(shotPaths))
-	if err := remote.SendTask(target, taskDir, taskID); err != nil {
-		die("send: %v", err)
+	_ = taskDir
+
+	// Commit and push
+	fmt.Printf("Pushing task %s (%d image(s))...\n", taskID, len(shotPaths))
+	rel := filepath.Join(".xmuggle", "queue", taskID)
+	if err := gitops.CommitAndPush(repoRoot, []string{rel}, fmt.Sprintf("xmuggle: task %s", taskID)); err != nil {
+		die("push task: %v", err)
 	}
+
+	// Mark screenshots as processed (delete from Desktop)
 	for _, sp := range shotPaths {
 		_ = images.MarkProcessed(sp)
 	}
 
+	// Poll for result
 	fmt.Println("Waiting for result...")
-	pollForResults([]string{taskID}, func(id string) (*queue.Result, error) {
-		return remote.PollForResult(target, id, 10*time.Minute, 5*time.Second)
-	}, a.repo)
+	resultDir := filepath.Join(p.ResultsDir, taskID)
+	resultFile := filepath.Join(resultDir, "result.json")
+
+	timeout := time.After(10 * time.Minute)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			die("Timed out waiting for result (10m)")
+		case <-ticker.C:
+			_ = gitops.PullRebase(repoRoot)
+			if _, err := os.Stat(resultFile); err == nil {
+				r, err := queue.ReadResult(resultDir)
+				if err != nil {
+					die("read result: %v", err)
+				}
+				printResult(taskID, r)
+
+				// Pull latest code
+				fmt.Printf("\nPulling latest...\n")
+				cmd := exec.Command("git", "pull")
+				cmd.Dir = repoRoot
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				_ = cmd.Run()
+				return
+			}
+			fmt.Print(".")
+		}
+	}
 }
 
-func runRemoteGit(shotPaths []string, a *mainArgs) {
-	cfg, err := config.Load()
-	if err != nil {
-		die("load config: %v", err)
-	}
-	if cfg.Git == nil {
-		die("git transport not configured. Run: xmuggle init-send <owner/repo> (or init-recv on the processing machine)")
-	}
-	if cfg.Age == nil {
-		die("no age keypair. Run: xmuggle init-send <owner/repo> (or init-recv on the processing machine)")
-	}
-
-	recipient := a.to
-	repo := a.repo
-
-	if repo == "" {
-		// Select peer+repo combo — this sets both recipient and repo.
-		h, r, err := selectPeerRepo(cfg)
-		if err != nil {
-			die("%v", err)
+func printResult(taskID string, r *queue.Result) {
+	fmt.Printf("\n\n--- Task %s ---\n", taskID)
+	if r.Status == "success" {
+		fmt.Println("Fix applied successfully!")
+		if r.Summary != "" {
+			fmt.Println()
+			fmt.Println(r.Summary)
 		}
-		if recipient == "" {
-			recipient = h
+		if r.PRUrl != "" {
+			fmt.Println("PR:", r.PRUrl)
 		}
-		repo = r
-	} else if recipient == "" {
-		recipient = cfg.DefaultRecipient
-	}
-	if recipient == "" {
-		die("no recipient specified; run: xmuggle add-recipient <host> --default or pass --to <host>")
-	}
-
-	fmt.Printf("Queue repo: %s\n", cfg.Git.QueueRepo)
-	fmt.Printf("Recipient: %s\n", recipient)
-	fmt.Printf("Target repo: %s\n", repo)
-
-	taskID := queue.NewTaskID()
-	fmt.Printf("Encrypting and pushing task %s (%d image(s))...\n", taskID, len(shotPaths))
-	err = gitqueue.SendTask(cfg, gitqueue.SendArgs{
-		TaskID:          taskID,
-		Repo:            repo,
-		Message:         a.message,
-		ScreenshotPaths: shotPaths,
-		Recipient:       a.to,
-	})
-	if err != nil {
-		die("send (git): %v", err)
-	}
-	for _, sp := range shotPaths {
-		_ = images.MarkProcessed(sp)
-	}
-
-	fmt.Println("Waiting for result...")
-	pollForResults([]string{taskID}, func(id string) (*queue.Result, error) {
-		r, err := gitqueue.PollForResult(cfg, id, 10*time.Minute)
-		if err != nil {
-			return nil, err
+		if r.Branch != "" {
+			fmt.Println("Branch:", r.Branch)
 		}
-		return &queue.Result{
-			Status:    r.Status,
-			PRUrl:     r.PRUrl,
-			Branch:    r.Branch,
-			Summary:   r.Summary,
-			Timestamp: r.Timestamp,
-		}, nil
-	}, a.repo)
-}
-
-// pollForResults drains results serially and prints summaries, then optionally git-pulls in a local repo.
-func pollForResults(taskIDs []string, poll func(string) (*queue.Result, error), repo string) {
-	failed := false
-	for _, id := range taskIDs {
-		r, err := poll(id)
-		fmt.Printf("\n--- Task %s ---\n", id)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			failed = true
-			continue
-		}
-		if r.Status == "success" {
-			fmt.Println("Fix applied successfully!")
-			if r.Summary != "" {
-				fmt.Println()
-				fmt.Println(r.Summary)
-			}
-			if r.PRUrl != "" {
-				fmt.Println("PR:", r.PRUrl)
-			}
-			if r.Branch != "" {
-				fmt.Println("Branch:", r.Branch)
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, "Agent reported an error:")
-			fmt.Fprintln(os.Stderr, r.Summary)
-			failed = true
-		}
-	}
-
-	if _, err := os.Stat(repo); err == nil {
-		fmt.Printf("\nPulling latest in %s...\n", repo)
-		cmd := exec.Command("git", "pull")
-		cmd.Dir = repo
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		_ = cmd.Run()
-	}
-	if failed {
+	} else {
+		fmt.Fprintln(os.Stderr, "Agent reported an error:")
+		fmt.Fprintln(os.Stderr, r.Summary)
 		os.Exit(1)
 	}
 }
 
-// promptSelectScreenshots shows an interactive numbered list of images (newest
-// first, images only) and lets the user pick one or more by number.
-func promptSelectScreenshots() []string {
-	imgs, err := images.ListAll()
+func selectPeer(peersDir, selfHostname string) string {
+	entries, err := os.ReadDir(peersDir)
 	if err != nil {
-		die("list: %v", err)
-	}
-	if len(imgs) == 0 {
-		die("No screenshots found on ~/Desktop.")
+		die("read peers: %v (run 'xmuggle init' first)", err)
 	}
 
-	fmt.Printf("Select screenshot(s) to send (newest first):\n\n")
-	for i, img := range imgs {
-		status := "pending"
-		if img.IsProcessed {
-			status = "done"
+	var peers []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
 		}
-		age := time.Since(img.ModTime).Truncate(time.Second)
-		fmt.Printf("  [%d] %-7s %s  (%s ago)\n", i+1, status, img.Name, age)
+		if e.Name() == selfHostname {
+			continue
+		}
+		peers = append(peers, e.Name())
 	}
-	fmt.Println()
-	fmt.Print("Enter numbers (e.g. 1 3 5 or 1,3,5 or 1-3): ")
 
+	if len(peers) == 0 {
+		die("No peers found. Run 'xmuggle init' from another machine that has this repo cloned.")
+	}
+	if len(peers) == 1 {
+		return peers[0]
+	}
+
+	fmt.Println("\nSelect a peer to send to:")
+	for i, p := range peers {
+		fmt.Printf("  [%d] %s\n", i+1, p)
+	}
+	fmt.Print("Choice: ")
 	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		die("read input: %v", err)
+	line, _ := reader.ReadString('\n')
+	n, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || n < 1 || n > len(peers) {
+		die("invalid selection")
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		die("No selection made.")
-	}
-
-	selected := parseNumberSelection(line, len(imgs))
-	if len(selected) == 0 {
-		die("No valid selection.")
-	}
-
-	var paths []string
-	for _, idx := range selected {
-		paths = append(paths, imgs[idx].Path)
-	}
-	return paths
+	return peers[n-1]
 }
 
-// parseNumberSelection parses user input like "1 3 5", "1,3,5", "1-3", or
-// combinations like "1,3-5,7" into zero-based indices.
-func parseNumberSelection(input string, max int) []int {
-	// Normalize: replace commas with spaces
-	input = strings.ReplaceAll(input, ",", " ")
-	parts := strings.Fields(input)
-
-	seen := map[int]bool{}
-	var result []int
-
-	for _, part := range parts {
-		if strings.Contains(part, "-") {
-			// Range like "1-3"
-			bounds := strings.SplitN(part, "-", 2)
-			lo, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
-			hi, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
-			if err1 != nil || err2 != nil {
-				continue
-			}
-			for n := lo; n <= hi; n++ {
-				idx := n - 1 // zero-based
-				if idx >= 0 && idx < max && !seen[idx] {
-					seen[idx] = true
-					result = append(result, idx)
-				}
-			}
-		} else {
-			n, err := strconv.Atoi(strings.TrimSpace(part))
-			if err != nil {
-				continue
-			}
-			idx := n - 1
-			if idx >= 0 && idx < max && !seen[idx] {
-				seen[idx] = true
-				result = append(result, idx)
-			}
-		}
-	}
-	return result
+func remoteToSlug(remote string) string {
+	s := strings.TrimPrefix(remote, "https://github.com/")
+	s = strings.TrimPrefix(s, "git@github.com:")
+	s = strings.TrimSuffix(s, ".git")
+	return s
 }
 
-// cmdList shows images in ~/.xmuggle/. With --json, outputs machine-readable JSON.
+// ────────────────────────────────────────────────────────────────────
+// list
+// ────────────────────────────────────────────────────────────────────
+
 func cmdList(args []string) {
 	useJSON := false
 	for _, a := range args {
@@ -658,7 +474,7 @@ func cmdList(args []string) {
 			unprocessed++
 		}
 	}
-	fmt.Printf("%d image(s) in ~/.xmuggle/ (%d unprocessed):\n\n", len(imgs), unprocessed)
+	fmt.Printf("%d image(s) tracked (%d unprocessed):\n\n", len(imgs), unprocessed)
 	for _, img := range imgs {
 		status := "pending"
 		if img.IsProcessed {
@@ -668,909 +484,127 @@ func cmdList(args []string) {
 	}
 }
 
-//
-// Subcommands
-//
+// ────────────────────────────────────────────────────────────────────
+// peers
+// ────────────────────────────────────────────────────────────────────
 
-// setupQueueRepo registers the queue repo and scaffolds its directories.
-func setupQueueRepo(cfg *config.Config, slug string) {
-	cfg.SetGit(slug)
-	if err := config.Save(cfg); err != nil {
-		die("save config: %v", err)
-	}
+func cmdPeers() {
+	repoRoot := mustRepoRoot()
+	hostname := mustHostname()
+	p := config.GetRepoPaths(repoRoot)
 
-	fmt.Printf("Cloning %s into %s...\n", slug, cfg.Git.CloneDir)
-	if err := gitqueue.EnsureCloned(slug, cfg.Git.CloneDir, cfg.Git.Branch); err != nil {
-		die("clone: %v", err)
-	}
+	_ = gitops.PullRebase(repoRoot)
 
-	var touched []string
-	for _, d := range []string{"queue", "results", "pubkeys", "processed", "roles/recv", "roles/send"} {
-		rel := d + "/.gitkeep"
-		if !gitqueue.FileExists(cfg.Git.CloneDir, rel) {
-			_ = gitqueue.WriteFile(cfg.Git.CloneDir, rel, []byte(""))
-			touched = append(touched, rel)
-		}
-	}
-	if len(touched) > 0 {
-		if err := gitqueue.CommitAndPush(cfg.Git.CloneDir, touched, "Scaffold queue repo directories", cfg.Git.Branch, cfg.Git.AuthorName, cfg.Git.AuthorEmail); err != nil {
-			die("commit: %v", err)
-		}
-	}
-	fmt.Printf("Queue repo ready: %s\n", slug)
-}
-
-// ensureKeypair generates a keypair if missing, otherwise reads the existing one.
-// Returns the public key.
-func ensureKeypair(cfg *config.Config) string {
-	identityPath := config.DefaultIdentityPath()
-	if cfg.Age != nil && cfg.Age.IdentityFile != "" {
-		identityPath = cfg.Age.IdentityFile
-	}
-
-	var pub string
-	if _, err := os.Stat(identityPath); err == nil {
-		p, err := ageutil.ReadIdentityPubkey(identityPath)
-		if err != nil {
-			die("read existing identity: %v", err)
-		}
-		pub = p
-		fmt.Printf("Identity exists at %s\n", identityPath)
-	} else {
-		fmt.Printf("Generating age keypair at %s...\n", identityPath)
-		p, err := ageutil.GenerateKeypair(identityPath)
-		if err != nil {
-			die("generate keypair: %v", err)
-		}
-		pub = p
-	}
-
-	cfg.SetAge(identityPath, pub)
-	if err := config.Save(cfg); err != nil {
-		die("save config: %v", err)
-	}
-	fmt.Printf("Public key: %s\n", pub)
-	return pub
-}
-
-// baseInit performs the setup common to both init-recv and init-send:
-// ensures dirs, loads config, scaffolds queue repo, ensures age keypair,
-// publishes pubkey. Returns the loaded config. Idempotent.
-func baseInit(slug string) *config.Config {
-	if !strings.Contains(slug, "/") {
-		die("Invalid slug: expected owner/repo")
-	}
-	if err := config.EnsureDirs(); err != nil {
-		die("ensure dirs: %v", err)
-	}
-	cfg, err := config.Load()
+	entries, err := os.ReadDir(p.PeersDir)
 	if err != nil {
-		die("load config: %v", err)
+		die("read peers: %v (run 'xmuggle init' first)", err)
 	}
 
-	setupQueueRepo(cfg, slug)
-	ensureKeypair(cfg)
-	publishOwnPubkey(cfg)
-	return cfg
-}
-
-// ReceiverRepo describes a git repo registered with a receiver.
-type ReceiverRepo struct {
-	Name   string `json:"name"`
-	Remote string `json:"remote,omitempty"`
-	Path   string `json:"path"`
-}
-
-// ReceiverMarker is the JSON stored in roles/recv/<hostname>.
-type ReceiverMarker struct {
-	Repos []ReceiverRepo `json:"repos,omitempty"`
-}
-
-// PeerInfo is a discovered peer with optional repo metadata.
-type PeerInfo struct {
-	Hostname string
-	Repos    []ReceiverRepo
-}
-
-// initArgs holds the parsed result of init-recv / init-send arguments.
-type initArgs struct {
-	slug    string
-	peer    string
-	useJSON bool
-}
-
-// parseInitArgs parses <slug> [--peer <host>] [--json]. `cmd` is used in the
-// usage error string only.
-func parseInitArgs(args []string, cmd string) initArgs {
-	var a initArgs
-	i := 0
-	for i < len(args) {
-		switch args[i] {
-		case "--peer":
-			if i+1 >= len(args) {
-				die("Usage: xmuggle %s <owner/repo> [--peer <hostname>] [--json]", cmd)
-			}
-			a.peer = args[i+1]
-			i += 2
-		case "--json":
-			a.useJSON = true
-			i++
-		default:
-			if a.slug == "" && !strings.HasPrefix(args[i], "--") {
-				a.slug = args[i]
-				i++
-			} else {
-				i++
-			}
-		}
-	}
-	if a.slug == "" {
-		die("Usage: xmuggle %s <owner/repo> [--peer <hostname>] [--json]", cmd)
-	}
-	return a
-}
-
-// detectGitRepo checks whether the current directory is inside a git repo.
-// Returns the remote origin URL, the repo root path, and whether it is a repo.
-func detectGitRepo() (remote, repoPath string, ok bool) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", "", false
-	}
-	repoPath = strings.TrimSpace(string(out))
-	out, err = exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return "", repoPath, true
-	}
-	return strings.TrimSpace(string(out)), repoPath, true
-}
-
-// remoteToSlug converts a git remote URL to an owner/repo slug.
-func remoteToSlug(remote string) string {
-	s := strings.TrimPrefix(remote, "https://github.com/")
-	s = strings.TrimPrefix(s, "git@github.com:")
-	s = strings.TrimSuffix(s, ".git")
-	return s
-}
-
-// readReceiverMarker reads and parses a receiver role marker file.
-func readReceiverMarker(cloneDir, hostname string) ReceiverMarker {
-	var marker ReceiverMarker
-	rel := fmt.Sprintf("roles/recv/%s", hostname)
-	if !gitqueue.FileExists(cloneDir, rel) {
-		return marker
-	}
-	data, err := gitqueue.ReadFile(cloneDir, rel)
-	if err != nil || len(data) == 0 {
-		return marker
-	}
-	_ = json.Unmarshal(data, &marker)
-	return marker
-}
-
-// peerRepoEntry is a flattened (hostname, repo) pair for selection.
-type peerRepoEntry struct {
-	hostname string
-	repo     ReceiverRepo
-}
-
-func (e peerRepoEntry) slug() string {
-	if e.repo.Remote != "" {
-		return remoteToSlug(e.repo.Remote)
-	}
-	return e.repo.Path
-}
-
-// selectPeerRepo discovers all receivers with registered repos and prompts
-// the user to select one. Returns the recipient hostname and repo slug.
-func selectPeerRepo(cfg *config.Config) (hostname, repoSlug string, err error) {
-	if cfg.Git == nil {
-		return "", "", fmt.Errorf("git transport not configured")
-	}
-	if err := gitqueue.EnsureCloned(cfg.Git.QueueRepo, cfg.Git.CloneDir, cfg.Git.Branch); err != nil {
-		return "", "", err
-	}
-	_ = gitqueue.PullRebase(cfg.Git.CloneDir, cfg.Git.Branch)
-
-	dir := filepath.Join(cfg.Git.CloneDir, "roles", "recv")
-	entries, err2 := os.ReadDir(dir)
-	if err2 != nil {
-		return "", "", fmt.Errorf("no receivers found")
-	}
-
-	var options []peerRepoEntry
+	fmt.Println("Peers:")
 	for _, e := range entries {
-		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil || len(data) == 0 {
-			continue
-		}
-		var m ReceiverMarker
-		if json.Unmarshal(data, &m) != nil || len(m.Repos) == 0 {
-			continue
-		}
-		for _, r := range m.Repos {
-			options = append(options, peerRepoEntry{hostname: e.Name(), repo: r})
-		}
-	}
-
-	if len(options) == 0 {
-		return "", "", fmt.Errorf("no receivers with registered repos found; run 'xmuggle init-recv <queue-repo>' from a git repo on the receiving machine")
-	}
-	if len(options) == 1 {
-		o := options[0]
-		fmt.Printf("Receiver: %s / %s\n", o.hostname, o.repo.Name)
-		return o.hostname, o.slug(), nil
-	}
-	if !interactive() {
-		return "", "", fmt.Errorf("multiple receiver repos available; run interactively to select")
-	}
-
-	fmt.Println("\nSelect a receiver + repo:")
-	for i, o := range options {
-		slug := o.slug()
-		fmt.Printf("  [%d] %s / %s  (%s)\n", i+1, o.hostname, o.repo.Name, slug)
-	}
-	fmt.Print("Choice: ")
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	n, err3 := strconv.Atoi(strings.TrimSpace(line))
-	if err3 != nil || n < 1 || n > len(options) {
-		return "", "", fmt.Errorf("invalid selection")
-	}
-	o := options[n-1]
-	return o.hostname, o.slug(), nil
-}
-
-// cmdInit registers this machine with the queue repo. If run from inside a git
-// repo, it registers as a receiver (installs daemon). Otherwise it registers as
-// a sender. In both cases it discovers peers and caches pubkeys.
-func cmdInit(args []string) {
-	opts := parseInitArgs(args, "init")
-	cfg := baseInit(opts.slug)
-
-	// If we're inside a git repo, register as receiver + install daemon.
-	_, _, inRepo := detectGitRepo()
-	if inRepo {
-		cmdInitRecvWith(cfg, opts)
-	} else {
-		cmdInitSendWith(cfg, opts)
-	}
-}
-
-func cmdInitRecvWith(cfg *config.Config, opts initArgs) {
-	var repo *ReceiverRepo
-	if remote, repoPath, ok := detectGitRepo(); ok {
-		name := filepath.Base(repoPath)
-		repo = &ReceiverRepo{
-			Name:   name,
-			Remote: remote,
-			Path:   repoPath,
-		}
-		fmt.Printf("Detected git repo: %s (%s)\n", name, repoPath)
-		if remote != "" {
-			fmt.Printf("Remote: %s\n", remote)
-		}
-	}
-
-	publishRoleMarker(cfg, "recv", repo)
-
-	fmt.Println()
-	fmt.Println("Installing daemon...")
-	if err := daemoninstall.Install(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		fmt.Fprintln(os.Stderr, "Fallback: run `make daemon-install` from the repo.")
-		os.Exit(1)
-	}
-	fmt.Println("Daemon installed and running.")
-
-	peers, _ := discoverPeers(cfg, "send")
-
-	if opts.useJSON {
-		emitPeersJSON(cfg, "sender", peers)
-		return
-	}
-
-	var selected string
-	switch {
-	case opts.peer != "":
-		selected = opts.peer
-	case interactive() && len(peers) > 0:
-		selected = promptSelectPeer("sender", peers)
-	default:
-		fmt.Println()
-		printDiscoveredPeers("sender", peers)
-		fmt.Println()
-		fmt.Println("This machine will now process queue tasks addressed to it.")
-		fmt.Println("On the sending machine, run:")
-		fmt.Printf("  xmuggle init %s\n", opts.slug)
-		return
-	}
-
-	if selected == "" {
-		return
-	}
-	pub, err := fetchPeerPubkey(cfg, selected)
-	if err != nil {
-		die("fetch pubkey for %s: %v", selected, err)
-	}
-	cfg.UpsertRecipient(config.Recipient{Hostname: selected, Pubkey: pub})
-	if err := config.Save(cfg); err != nil {
-		die("save config: %v", err)
-	}
-	fmt.Printf("Cached sender pubkey for: %s\n", selected)
-}
-
-func cmdInitSendWith(cfg *config.Config, opts initArgs) {
-	publishRoleMarker(cfg, "send", nil)
-
-	peers, _ := discoverPeers(cfg, "recv")
-
-	if opts.useJSON {
-		emitPeersJSON(cfg, "receiver", peers)
-		return
-	}
-
-	var selected string
-	switch {
-	case opts.peer != "":
-		selected = opts.peer
-	case interactive() && len(peers) > 0:
-		selected = promptSelectPeer("receiver", peers)
-	default:
-		fmt.Println()
-		printDiscoveredPeers("receiver", peers)
-		fmt.Println()
-		fmt.Println("Pick one with:")
-		fmt.Println("  xmuggle add-recipient <hostname> --default")
-		return
-	}
-
-	if selected == "" {
-		return
-	}
-	pub, err := fetchPeerPubkey(cfg, selected)
-	if err != nil {
-		die("fetch pubkey for %s: %v", selected, err)
-	}
-	cfg.UpsertRecipient(config.Recipient{Hostname: selected, Pubkey: pub})
-	cfg.DefaultRecipient = selected
-	if err := config.Save(cfg); err != nil {
-		die("save config: %v", err)
-	}
-	fmt.Printf("Default recipient: %s\n", selected)
-	fmt.Println()
-	fmt.Println("Ready to send. Try:")
-	fmt.Println("  xmuggle send --screenshots")
-}
-
-// cmdInitRecv sets up this machine as a receiver: base init + installs and
-// loads the launchd daemon so it starts processing incoming queue tasks.
-//
-// Optionally accepts --peer <sender-host> to cache that sender's pubkey
-// locally, and --json for non-interactive (AI-driven) use.
-func cmdInitRecv(args []string) {
-	opts := parseInitArgs(args, "init-recv")
-	cfg := baseInit(opts.slug)
-
-	// Detect if we're inside a git repo — if so, register it with this receiver.
-	var repo *ReceiverRepo
-	if remote, repoPath, ok := detectGitRepo(); ok {
-		name := filepath.Base(repoPath)
-		repo = &ReceiverRepo{
-			Name:   name,
-			Remote: remote,
-			Path:   repoPath,
-		}
-		fmt.Printf("Detected git repo: %s (%s)\n", name, repoPath)
-		if remote != "" {
-			fmt.Printf("Remote: %s\n", remote)
-		}
-	}
-
-	publishRoleMarker(cfg, "recv", repo)
-
-	fmt.Println()
-	fmt.Println("Installing daemon...")
-	if err := daemoninstall.Install(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		fmt.Fprintln(os.Stderr, "Fallback: run `make daemon-install` from the repo.")
-		os.Exit(1)
-	}
-	fmt.Println("Daemon installed and running.")
-
-	peers, _ := discoverPeers(cfg, "send")
-
-	if opts.useJSON {
-		emitPeersJSON(cfg, "sender", peers)
-		return
-	}
-
-	var selected string
-	switch {
-	case opts.peer != "":
-		selected = opts.peer
-	case interactive() && len(peers) > 0:
-		selected = promptSelectPeer("sender", peers)
-	default:
-		fmt.Println()
-		printDiscoveredPeers("sender", peers)
-		fmt.Println()
-		fmt.Println("This machine will now process queue tasks addressed to it.")
-		fmt.Println("Tell senders to run:")
-		fmt.Printf("  xmuggle init-send %s\n", opts.slug)
-		fmt.Printf("  xmuggle add-recipient %s --default\n", mustHostname())
-		return
-	}
-
-	if selected == "" {
-		return
-	}
-	pub, err := fetchPeerPubkey(cfg, selected)
-	if err != nil {
-		die("fetch pubkey for %s: %v", selected, err)
-	}
-	cfg.UpsertRecipient(config.Recipient{Hostname: selected, Pubkey: pub})
-	if err := config.Save(cfg); err != nil {
-		die("save config: %v", err)
-	}
-	fmt.Printf("Cached sender pubkey for: %s\n", selected)
-}
-
-// publishRoleMarker writes roles/<role>/<hostname> to the queue repo.
-// If repo is non-nil (receiver in a git repo), the marker stores JSON with
-// the repo list so senders can discover which repos this receiver handles.
-func publishRoleMarker(cfg *config.Config, role string, repo *ReceiverRepo) {
-	if cfg.Git == nil {
-		return
-	}
-	rel := fmt.Sprintf("roles/%s/%s", role, cfg.Hostname)
-
-	if repo == nil {
-		// Simple marker (sender role or receiver not in a git repo).
-		if gitqueue.FileExists(cfg.Git.CloneDir, rel) {
-			return
-		}
-		if err := gitqueue.WriteFile(cfg.Git.CloneDir, rel, []byte("")); err != nil {
-			fmt.Fprintf(os.Stderr, "note: could not write role marker: %v\n", err)
-			return
-		}
-		msg := fmt.Sprintf("Register %s as %s", cfg.Hostname, role)
-		if err := gitqueue.CommitAndPush(cfg.Git.CloneDir, []string{rel}, msg, cfg.Git.Branch, cfg.Git.AuthorName, cfg.Git.AuthorEmail); err != nil {
-			fmt.Fprintf(os.Stderr, "note: could not push role marker: %v\n", err)
-		}
-		return
-	}
-
-	// Read existing marker and merge the new repo in.
-	marker := readReceiverMarker(cfg.Git.CloneDir, cfg.Hostname)
-	found := false
-	for i, r := range marker.Repos {
-		if r.Path == repo.Path {
-			marker.Repos[i] = *repo
-			found = true
-			break
-		}
-	}
-	if !found {
-		marker.Repos = append(marker.Repos, *repo)
-	}
-
-	content, _ := json.MarshalIndent(marker, "", "  ")
-	content = append(content, '\n')
-	if err := gitqueue.WriteFile(cfg.Git.CloneDir, rel, content); err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not write role marker: %v\n", err)
-		return
-	}
-	msg := fmt.Sprintf("Register %s as %s for %s", cfg.Hostname, role, repo.Name)
-	if err := gitqueue.CommitAndPush(cfg.Git.CloneDir, []string{rel}, msg, cfg.Git.Branch, cfg.Git.AuthorName, cfg.Git.AuthorEmail); err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not push role marker: %v\n", err)
-	}
-}
-
-// cmdInitSend sets up this machine as a sender: base init + role marker.
-// Optionally accepts --peer <receiver-host> to set default_recipient in one
-// shot, and --json for non-interactive (AI-driven) use.
-func cmdInitSend(args []string) {
-	opts := parseInitArgs(args, "init-send")
-	cfg := baseInit(opts.slug)
-	publishRoleMarker(cfg, "send", nil)
-
-	peers, _ := discoverPeers(cfg, "recv")
-
-	if opts.useJSON {
-		emitPeersJSON(cfg, "receiver", peers)
-		return
-	}
-
-	var selected string
-	switch {
-	case opts.peer != "":
-		selected = opts.peer
-	case interactive() && len(peers) > 0:
-		selected = promptSelectPeer("receiver", peers)
-	default:
-		fmt.Println()
-		printDiscoveredPeers("receiver", peers)
-		fmt.Println()
-		fmt.Println("Pick one with:")
-		fmt.Println("  xmuggle add-recipient <hostname> --default")
-		return
-	}
-
-	if selected == "" {
-		return
-	}
-	pub, err := fetchPeerPubkey(cfg, selected)
-	if err != nil {
-		die("fetch pubkey for %s: %v", selected, err)
-	}
-	cfg.UpsertRecipient(config.Recipient{Hostname: selected, Pubkey: pub})
-	cfg.DefaultRecipient = selected
-	if err := config.Save(cfg); err != nil {
-		die("save config: %v", err)
-	}
-	fmt.Printf("Default recipient: %s\n", selected)
-	fmt.Println()
-	fmt.Println("Ready to send. Try:")
-	fmt.Println("  xmuggle --repo <repo> --remote --git --msg \"fix this\"")
-}
-
-// discoverPeers reads roles/<role>/* from the queue repo clone and returns
-// peer info (hostname + optional repo metadata) excluding this machine.
-func discoverPeers(cfg *config.Config, role string) ([]PeerInfo, error) {
-	if cfg.Git == nil {
-		return nil, fmt.Errorf("git transport not configured")
-	}
-	dir := filepath.Join(cfg.Git.CloneDir, "roles", role)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []PeerInfo
-	for _, e := range entries {
-		if !e.Type().IsRegular() {
-			continue
-		}
 		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		if e.Name() == cfg.Hostname {
-			continue
+		marker := ""
+		if e.Name() == hostname {
+			marker = "  ← this machine"
 		}
-		pi := PeerInfo{Hostname: e.Name()}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err == nil && len(data) > 0 {
-			var marker ReceiverMarker
-			if json.Unmarshal(data, &marker) == nil {
-				pi.Repos = marker.Repos
-			}
-		}
-		out = append(out, pi)
+		fmt.Printf("  %s%s\n", e.Name(), marker)
 	}
-	return out, nil
 }
 
-// peerHostnames extracts just the hostnames from a PeerInfo slice.
-func peerHostnames(peers []PeerInfo) []string {
-	var out []string
-	for _, p := range peers {
-		out = append(out, p.Hostname)
-	}
-	return out
-}
+// ────────────────────────────────────────────────────────────────────
+// screenshots picker
+// ────────────────────────────────────────────────────────────────────
 
-// fetchPeerPubkey pulls the queue repo and returns pubkeys/<host>.pub.
-func fetchPeerPubkey(cfg *config.Config, host string) (string, error) {
-	if cfg.Git == nil {
-		return "", fmt.Errorf("git transport not configured")
-	}
-	if err := gitqueue.EnsureCloned(cfg.Git.QueueRepo, cfg.Git.CloneDir, cfg.Git.Branch); err != nil {
-		return "", err
-	}
-	_ = gitqueue.PullRebase(cfg.Git.CloneDir, cfg.Git.Branch)
-	rel := fmt.Sprintf("pubkeys/%s.pub", host)
-	if !gitqueue.FileExists(cfg.Git.CloneDir, rel) {
-		return "", fmt.Errorf("no pubkey at %s in %s (has that machine run 'xmuggle init-*' yet?)", rel, cfg.Git.QueueRepo)
-	}
-	data, err := gitqueue.ReadFile(cfg.Git.CloneDir, rel)
+func promptSelectScreenshots() []string {
+	imgs, err := images.ListAll()
 	if err != nil {
-		return "", err
+		die("list: %v", err)
 	}
-	pub := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(pub, "age1") {
-		return "", fmt.Errorf("%s contains something that is not an age pubkey", rel)
+	if len(imgs) == 0 {
+		die("No screenshots found on ~/Desktop.")
 	}
-	return pub, nil
-}
 
-// promptSelectPeer shows a numbered menu and returns the chosen hostname,
-// or "" if skipped / invalid.
-func promptSelectPeer(role string, peers []PeerInfo) string {
-	labelPlural := role + "s"
-	fmt.Printf("\nRegistered %s:\n", labelPlural)
-	for i, p := range peers {
-		extra := ""
-		if len(p.Repos) > 0 {
-			var names []string
-			for _, r := range p.Repos {
-				names = append(names, r.Name)
-			}
-			extra = fmt.Sprintf("  repos: %s", strings.Join(names, ", "))
+	fmt.Printf("Select screenshot(s) to send (newest first):\n\n")
+	for i, img := range imgs {
+		status := "pending"
+		if img.IsProcessed {
+			status = "done"
 		}
-		fmt.Printf("  [%d] %s%s\n", i+1, p.Hostname, extra)
+		age := time.Since(img.ModTime).Truncate(time.Second)
+		fmt.Printf("  [%d] %-7s %s  (%s ago)\n", i+1, status, img.Name, age)
 	}
-	fmt.Printf("  [0] skip\n")
-	fmt.Printf("Select one [0]: ")
+	fmt.Println()
+	fmt.Print("Enter numbers (e.g. 1 3 5 or 1,3,5 or 1-3): ")
 
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return ""
+		die("read input: %v", err)
 	}
 	line = strings.TrimSpace(line)
-	if line == "" || line == "0" {
-		return ""
+	if line == "" {
+		die("No selection made.")
 	}
-	n, err := strconv.Atoi(line)
-	if err != nil || n < 1 || n > len(peers) {
-		fmt.Println("(invalid selection — skipping)")
-		return ""
+
+	selected := parseNumberSelection(line, len(imgs))
+	if len(selected) == 0 {
+		die("No valid selection.")
 	}
-	return peers[n-1].Hostname
+
+	var paths []string
+	for _, idx := range selected {
+		paths = append(paths, imgs[idx].Path)
+	}
+	return paths
 }
 
-// printDiscoveredPeers lists peers informationally (no prompt).
-func printDiscoveredPeers(role string, peers []PeerInfo) {
-	labelPlural := role + "s"
-	fmt.Printf("Registered %s:\n", labelPlural)
-	if len(peers) == 0 {
-		fmt.Printf("  (none found — the %s needs to run 'xmuggle init-%s' first)\n", role, shortRole(role))
-		return
-	}
-	for _, p := range peers {
-		extra := ""
-		if len(p.Repos) > 0 {
-			var names []string
-			for _, r := range p.Repos {
-				names = append(names, r.Name)
-			}
-			extra = fmt.Sprintf("  repos: %s", strings.Join(names, ", "))
-		}
-		fmt.Printf("  - %s%s\n", p.Hostname, extra)
-	}
-}
-
-func shortRole(role string) string {
-	switch role {
-	case "sender":
-		return "send"
-	case "receiver":
-		return "recv"
-	}
-	return role
-}
-
-// emitPeersJSON prints a machine-readable choice summary.
-func emitPeersJSON(cfg *config.Config, peerRole string, peers []PeerInfo) {
-	type jsonPeer struct {
-		Hostname string         `json:"hostname"`
-		Repos    []ReceiverRepo `json:"repos,omitempty"`
-	}
-	var jpList []jsonPeer
-	for _, p := range peers {
-		jpList = append(jpList, jsonPeer{Hostname: p.Hostname, Repos: p.Repos})
-	}
-	if jpList == nil {
-		jpList = []jsonPeer{}
-	}
-	action := "select-peer"
-	hint := fmt.Sprintf("Re-run with --peer <hostname> to proceed.")
-	if len(peers) == 0 {
-		action = "no-peers"
-		hint = fmt.Sprintf("No %ss registered yet. Base setup is complete — add a peer later with 'xmuggle add-recipient <host> --default' or re-run init with --peer once a %s has registered.", peerRole, peerRole)
-	}
-	payload := map[string]any{
-		"action":     action,
-		"role":       peerRole,
-		"peers":      jpList,
-		"queue_repo": cfg.Git.QueueRepo,
-		"hint":       hint,
-	}
-	b, _ := json.MarshalIndent(payload, "", "  ")
-	fmt.Println(string(b))
-}
-
-// interactive returns true if stdin is connected to a terminal.
-func interactive() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
-
-func mustHostname() string {
-	h, _ := os.Hostname()
-	return config.NormalizeHostname(h)
-}
-
-// cmdPeers lists registered receivers and senders from the queue repo.
-func cmdPeers() {
-	cfg, err := config.Load()
-	if err != nil {
-		die("load config: %v", err)
-	}
-	if cfg.Git == nil {
-		die("git transport not configured. Run: xmuggle init-send <owner/repo> or init-recv <owner/repo>")
-	}
-	if err := gitqueue.EnsureCloned(cfg.Git.QueueRepo, cfg.Git.CloneDir, cfg.Git.Branch); err != nil {
-		die("reach queue repo: %v", err)
-	}
-	_ = gitqueue.PullRebase(cfg.Git.CloneDir, cfg.Git.Branch)
-
-	listRole := func(role string) []PeerInfo {
-		dir := filepath.Join(cfg.Git.CloneDir, "roles", role)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return nil
-		}
-		var out []PeerInfo
-		for _, e := range entries {
-			if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
+func parseNumberSelection(input string, max int) []int {
+	input = strings.ReplaceAll(input, ",", " ")
+	parts := strings.Fields(input)
+	seen := map[int]bool{}
+	var result []int
+	for _, part := range parts {
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			lo, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
+			hi, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err1 != nil || err2 != nil {
 				continue
 			}
-			pi := PeerInfo{Hostname: e.Name()}
-			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err == nil && len(data) > 0 {
-				var m ReceiverMarker
-				if json.Unmarshal(data, &m) == nil {
-					pi.Repos = m.Repos
+			for n := lo; n <= hi; n++ {
+				idx := n - 1
+				if idx >= 0 && idx < max && !seen[idx] {
+					seen[idx] = true
+					result = append(result, idx)
 				}
 			}
-			out = append(out, pi)
-		}
-		return out
-	}
-
-	recvs := listRole("recv")
-	sends := listRole("send")
-
-	fmt.Printf("Queue repo: %s\n\n", cfg.Git.QueueRepo)
-
-	fmt.Println("Receivers (process incoming tasks):")
-	if len(recvs) == 0 {
-		fmt.Println("  (none registered)")
-	}
-	for _, p := range recvs {
-		marker := ""
-		if p.Hostname == cfg.Hostname {
-			marker = "  ← this machine"
-		}
-		fmt.Printf("  %s%s\n", p.Hostname, marker)
-		for _, r := range p.Repos {
-			slug := r.Name
-			if r.Remote != "" {
-				slug = remoteToSlug(r.Remote)
+		} else {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil {
+				continue
 			}
-			fmt.Printf("    repo: %s  (%s)\n", slug, r.Path)
-		}
-	}
-
-	fmt.Println()
-	fmt.Println("Senders (submit tasks):")
-	if len(sends) == 0 {
-		fmt.Println("  (none registered)")
-	}
-	for _, p := range sends {
-		marker := ""
-		if p.Hostname == cfg.Hostname {
-			marker = "  ← this machine"
-		}
-		fmt.Printf("  %s%s\n", p.Hostname, marker)
-	}
-}
-
-func publishOwnPubkey(cfg *config.Config) {
-	if cfg.Git == nil || cfg.Age == nil {
-		return
-	}
-	if err := gitqueue.EnsureCloned(cfg.Git.QueueRepo, cfg.Git.CloneDir, cfg.Git.Branch); err != nil {
-		fmt.Fprintf(os.Stderr, "note: could not reach queue repo: %v\n", err)
-		return
-	}
-	_ = gitqueue.PullRebase(cfg.Git.CloneDir, cfg.Git.Branch)
-
-	rel := fmt.Sprintf("pubkeys/%s.pub", cfg.Hostname)
-	existing := ""
-	if gitqueue.FileExists(cfg.Git.CloneDir, rel) {
-		data, err := gitqueue.ReadFile(cfg.Git.CloneDir, rel)
-		if err == nil {
-			existing = strings.TrimSpace(string(data))
-		}
-	}
-	if existing == cfg.Age.Pubkey {
-		fmt.Printf("Pubkey already published at %s\n", rel)
-		return
-	}
-	if err := gitqueue.WriteFile(cfg.Git.CloneDir, rel, []byte(cfg.Age.Pubkey+"\n")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	if err := gitqueue.CommitAndPush(cfg.Git.CloneDir, []string{rel}, "Publish pubkey for "+cfg.Hostname, cfg.Git.Branch, cfg.Git.AuthorName, cfg.Git.AuthorEmail); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	fmt.Printf("Published %s to %s\n", rel, cfg.Git.QueueRepo)
-}
-
-func cmdAddRecipient(args []string) {
-	if len(args) < 1 {
-		die("Usage: xmuggle add-recipient <hostname> [--pubkey age1...] [--default]")
-	}
-	hostname := args[0]
-	var pubkey string
-	asDefault := false
-	for i := 1; i < len(args); i++ {
-		switch args[i] {
-		case "--pubkey":
-			i++
-			if i < len(args) {
-				pubkey = args[i]
+			idx := n - 1
+			if idx >= 0 && idx < max && !seen[idx] {
+				seen[idx] = true
+				result = append(result, idx)
 			}
-		case "--default":
-			asDefault = true
 		}
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		die("load config: %v", err)
-	}
-
-	if pubkey == "" {
-		if cfg.Git == nil {
-			die("no pubkey given and no queue repo. Pass --pubkey or run 'xmuggle init-send <owner/repo>' first.")
-		}
-		p, err := fetchPeerPubkey(cfg, hostname)
-		if err != nil {
-			die("%v", err)
-		}
-		pubkey = p
-	}
-
-	if !strings.HasPrefix(pubkey, "age1") {
-		die("%q doesn't look like an age pubkey", pubkey)
-	}
-
-	cfg.UpsertRecipient(config.Recipient{Hostname: hostname, Pubkey: pubkey})
-	if asDefault || cfg.DefaultRecipient == "" {
-		cfg.DefaultRecipient = hostname
-		fmt.Printf("Default recipient: %s\n", hostname)
-	}
-	if err := config.Save(cfg); err != nil {
-		die("save: %v", err)
-	}
-	fmt.Printf("Added recipient %s\n", hostname)
+	return result
 }
 
-// cmdRec captures screen frames and optionally auto-submits them as one task.
+// ────────────────────────────────────────────────────────────────────
+// rec
+// ────────────────────────────────────────────────────────────────────
+
 func cmdRec(args []string) {
 	var (
 		durStr  string
 		fpsVal  float64 = 1.0
 		format  string  = "jpg"
-		repo    string
 		message string
-		useGit  bool
-		isRemote bool
-		host    string
-		user    string
-		to      string
 	)
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -1592,34 +626,10 @@ func cmdRec(args []string) {
 			if i < len(args) {
 				format = args[i]
 			}
-		case "--repo":
-			i++
-			if i < len(args) {
-				repo = args[i]
-			}
 		case "--msg":
 			i++
 			if i < len(args) {
 				message = args[i]
-			}
-		case "--remote":
-			isRemote = true
-		case "--git":
-			useGit = true
-		case "--host":
-			i++
-			if i < len(args) {
-				host = args[i]
-			}
-		case "--user":
-			i++
-			if i < len(args) {
-				user = args[i]
-			}
-		case "--to":
-			i++
-			if i < len(args) {
-				to = args[i]
 			}
 		}
 	}
@@ -1653,7 +663,6 @@ func cmdRec(args []string) {
 		die("%v", err)
 	}
 
-	// Wait for Ctrl+C or duration expiry
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 
@@ -1675,57 +684,43 @@ func cmdRec(args []string) {
 		return
 	}
 
-	// Move frames to ~/.xmuggle/
-	storeDir := config.GetPaths().ConfigDir
-	var storePaths []string
-	for _, f := range frames {
-		dst := filepath.Join(storeDir, filepath.Base(f))
-		if err := os.Rename(f, dst); err != nil {
-			// Cross-device? copy instead
-			data, err2 := os.ReadFile(f)
-			if err2 != nil {
-				die("move frame: %v", err)
-			}
-			if err2 := os.WriteFile(dst, data, 0o644); err2 != nil {
-				die("write frame: %v", err2)
-			}
-			_ = os.Remove(f)
-		}
-		storePaths = append(storePaths, dst)
-	}
-
-	fmt.Printf("Frames saved to ~/.xmuggle/ (%s-*)\n", rec.Prefix())
-
-	if repo == "" {
-		fmt.Println("\nTo submit:")
-		fmt.Printf("  xmuggle --repo <repo> --img %s\n", rec.Prefix())
-		return
-	}
-
 	// Auto-submit
-	a := &mainArgs{
-		repo:    repo,
-		message: message,
-		useGit:  useGit,
-		remote:  isRemote,
-		host:    host,
-		user:    user,
-		to:      to,
+	repoRoot := mustRepoRoot()
+	p := config.GetRepoPaths(repoRoot)
+	hostname := mustHostname()
+
+	target := selectPeer(p.PeersDir, hostname)
+	remoteURL := gitops.RemoteURL(repoRoot)
+	repoSlug := repoRoot
+	if remoteURL != "" {
+		repoSlug = remoteToSlug(remoteURL)
 	}
 
-	fmt.Printf("\nSubmitting %d frames to %s...\n", len(storePaths), repo)
-	switch {
-	case useGit:
-		runRemoteGit(storePaths, a)
-	case isRemote:
-		runRemoteSSH(storePaths, a)
-	default:
-		runLocal(storePaths, a)
+	taskID := queue.NewTaskID()
+	t := queue.Task{
+		Repo:      repoSlug,
+		Message:   message,
+		Timestamp: time.Now().UnixMilli(),
+		Status:    queue.StatusPending,
+		Target:    target,
+		Sender:    hostname,
 	}
+	_, err := queue.WriteTaskMulti(p.QueueDir, taskID, t, frames)
+	if err != nil {
+		die("write task: %v", err)
+	}
+
+	rel := filepath.Join(".xmuggle", "queue", taskID)
+	if err := gitops.CommitAndPush(repoRoot, []string{rel}, fmt.Sprintf("xmuggle: rec %s", taskID)); err != nil {
+		die("push: %v", err)
+	}
+	fmt.Printf("Submitted %d frame(s) as task %s\n", len(frames), taskID)
 }
 
-// cmdRm removes images from ~/.xmuggle/ by fuzzy name match.
-// Accepts one or more <name> args, plus --all-done to delete every processed image.
+// ────────────────────────────────────────────────────────────────────
+// rm
+// ────────────────────────────────────────────────────────────────────
+
 func cmdRm(args []string) {
 	if len(args) == 0 {
 		die("Usage: xmuggle rm <name>... [--all-done]")
@@ -1742,7 +737,6 @@ func cmdRm(args []string) {
 	}
 
 	var failed bool
-
 	for _, q := range names {
 		name, err := images.RemoveByName(q)
 		if err != nil {
@@ -1774,31 +768,28 @@ func cmdRm(args []string) {
 	}
 }
 
-func cmdListRecipients() {
-	cfg, err := config.Load()
+// interactive returns true if stdin is connected to a terminal.
+func interactive() bool {
+	fi, err := os.Stdin.Stat()
 	if err != nil {
-		die("load config: %v", err)
+		return false
 	}
-	fmt.Println("Hostname:", cfg.Hostname)
-	if cfg.Age != nil {
-		fmt.Println("Self pubkey:", cfg.Age.Pubkey)
-	}
-	if cfg.Git != nil {
-		fmt.Println("Queue repo:", cfg.Git.QueueRepo)
-	}
-	fmt.Println()
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
 
-	if len(cfg.Recipients) == 0 {
-		fmt.Println("No recipients configured.")
-		return
+// runLocal runs the claude agent locally (used by rec auto-submit as fallback).
+func runLocal(shotPaths []string, repo, message string) {
+	p := prompt.Build(prompt.Options{
+		ScreenshotPaths: shotPaths,
+		Repo:            repo,
+		Message:         message,
+	})
+	code, err := spawn.Interactive(p, "")
+	if err != nil {
+		die("%v", err)
 	}
-	fmt.Println("Recipients:")
-	for _, r := range cfg.Recipients {
-		marker := ""
-		if r.Hostname == cfg.DefaultRecipient {
-			marker = " (default)"
-		}
-		fmt.Printf("  %s%s\n    %s\n", r.Hostname, marker, r.Pubkey)
+	for _, sp := range shotPaths {
+		_ = images.MarkProcessed(sp)
 	}
-	_ = json.Marshal // silence unused if imports get cleaned
+	os.Exit(code)
 }

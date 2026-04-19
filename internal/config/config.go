@@ -1,4 +1,4 @@
-// Package config manages ~/.xmuggle directories and the JSON config file.
+// Package config manages per-repo .xmuggle/ directories and daemon config.
 package config
 
 import (
@@ -9,77 +9,70 @@ import (
 	"strings"
 )
 
-type GitConfig struct {
-	QueueRepo      string `json:"queue_repo"`
-	CloneDir       string `json:"clone_dir"`
-	PollIntervalMS int    `json:"poll_interval_ms"`
-	Branch         string `json:"branch"`
-	AuthorName     string `json:"author_name"`
-	AuthorEmail    string `json:"author_email"`
+// RepoPaths holds paths under <repo>/.xmuggle/.
+type RepoPaths struct {
+	Root       string // <repo>/.xmuggle/
+	QueueDir   string // <repo>/.xmuggle/queue/
+	ResultsDir string // <repo>/.xmuggle/results/
+	PeersDir   string // <repo>/.xmuggle/peers/
+	ImagesFile string // <repo>/.xmuggle/images.json
+	ConfigFile string // <repo>/.xmuggle/config.json
+	RepoRoot   string // <repo>/
+	Home       string
 }
 
-type AgeConfig struct {
-	IdentityFile string `json:"identity_file"`
-	Pubkey       string `json:"pubkey"`
-}
-
-type Recipient struct {
-	Hostname string `json:"hostname"`
-	Pubkey   string `json:"pubkey"`
-}
-
-type Retention struct {
-	QueueDays   int `json:"queue_days"`
-	ResultsDays int `json:"results_days"`
-}
-
-type Config struct {
-	Version          int         `json:"version"`
-	Hostname         string      `json:"hostname"`
-	Git              *GitConfig  `json:"git,omitempty"`
-	Age              *AgeConfig  `json:"age,omitempty"`
-	Recipients       []Recipient `json:"recipients,omitempty"`
-	DefaultRecipient string      `json:"default_recipient,omitempty"`
-	Retention        *Retention  `json:"retention,omitempty"`
-}
-
-// Paths returns commonly used ~/.xmuggle paths.
-type Paths struct {
-	ConfigDir    string
-	QueueDir     string
-	ResultsDir   string
-	LogsDir      string
-	QueueRepoDir string
-	AgeDir       string
-	ConfigFile   string
-	Home         string
-}
-
-func GetPaths() Paths {
+// GetRepoPaths returns paths for a specific repo root.
+func GetRepoPaths(repoRoot string) RepoPaths {
 	home, _ := os.UserHomeDir()
-	root := filepath.Join(home, ".xmuggle")
-	return Paths{
-		ConfigDir:    root,
-		QueueDir:     filepath.Join(root, "queue"),
-		ResultsDir:   filepath.Join(root, "results"),
-		LogsDir:      filepath.Join(root, "logs"),
-		QueueRepoDir: filepath.Join(root, "queue-repo"),
-		AgeDir:       filepath.Join(root, "age"),
-		ConfigFile:   filepath.Join(root, "config.json"),
-		Home:         home,
+	root := filepath.Join(repoRoot, ".xmuggle")
+	return RepoPaths{
+		Root:       root,
+		QueueDir:   filepath.Join(root, "queue"),
+		ResultsDir: filepath.Join(root, "results"),
+		PeersDir:   filepath.Join(root, "peers"),
+		ImagesFile: filepath.Join(root, "images.json"),
+		ConfigFile: filepath.Join(root, "config.json"),
+		RepoRoot:   repoRoot,
+		Home:       home,
 	}
 }
 
-// EnsureDirs creates all the ~/.xmuggle subdirectories.
-func EnsureDirs() error {
-	p := GetPaths()
-	for _, d := range []string{p.ConfigDir, p.QueueDir, p.ResultsDir, p.LogsDir} {
+// DaemonPaths holds global daemon paths under ~/.xmuggle/.
+type DaemonPaths struct {
+	Root       string // ~/.xmuggle/
+	LogsDir    string // ~/.xmuggle/logs/
+	ConfigFile string // ~/.xmuggle/daemon.json
+}
+
+// GetDaemonPaths returns global daemon paths.
+func GetDaemonPaths() DaemonPaths {
+	home, _ := os.UserHomeDir()
+	root := filepath.Join(home, ".xmuggle")
+	return DaemonPaths{
+		Root:       root,
+		LogsDir:    filepath.Join(root, "logs"),
+		ConfigFile: filepath.Join(root, "daemon.json"),
+	}
+}
+
+// EnsureRepoDirs creates .xmuggle/ subdirectories in a repo.
+func EnsureRepoDirs(repoRoot string) error {
+	p := GetRepoPaths(repoRoot)
+	for _, d := range []string{p.Root, p.QueueDir, p.ResultsDir, p.PeersDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
-	if err := os.MkdirAll(p.AgeDir, 0o700); err != nil {
-		return err
+	return nil
+}
+
+// EnsureDaemonDirs creates ~/.xmuggle/ directories for daemon state.
+func EnsureDaemonDirs() error {
+	p := GetDaemonPaths()
+	for _, d := range []string{p.Root, p.LogsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -97,24 +90,18 @@ func NormalizeHostname(raw string) string {
 	return strings.Trim(s, "-")
 }
 
-// DefaultIdentityPath returns the path for the local age identity file.
-func DefaultIdentityPath() string {
-	return filepath.Join(GetPaths().AgeDir, "key.txt")
+// Config is the per-repo .xmuggle/config.json.
+type Config struct {
+	Version  int    `json:"version"`
+	Hostname string `json:"hostname"`
 }
 
-// Load reads ~/.xmuggle/config.json, creating a default if missing.
-func Load() (*Config, error) {
-	if err := EnsureDirs(); err != nil {
-		return nil, err
-	}
-	p := GetPaths()
+// Load reads <repoRoot>/.xmuggle/config.json.
+func Load(repoRoot string) (*Config, error) {
+	p := GetRepoPaths(repoRoot)
 	data, err := os.ReadFile(p.ConfigFile)
 	if os.IsNotExist(err) {
-		cfg := defaultConfig()
-		if err := Save(cfg); err != nil {
-			return nil, err
-		}
-		return cfg, nil
+		return defaultConfig(), nil
 	}
 	if err != nil {
 		return nil, err
@@ -130,9 +117,10 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config to disk.
-func Save(cfg *Config) error {
-	if err := EnsureDirs(); err != nil {
+// Save writes the config to <repoRoot>/.xmuggle/config.json.
+func Save(repoRoot string, cfg *Config) error {
+	p := GetRepoPaths(repoRoot)
+	if err := os.MkdirAll(filepath.Dir(p.ConfigFile), 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -140,7 +128,7 @@ func Save(cfg *Config) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(GetPaths().ConfigFile, data, 0o644)
+	return os.WriteFile(p.ConfigFile, data, 0o644)
 }
 
 func defaultConfig() *Config {
@@ -151,51 +139,60 @@ func defaultConfig() *Config {
 	}
 }
 
-// SetGit configures git transport with defaults for missing fields.
-func (c *Config) SetGit(queueRepo string) {
-	if c.Git == nil {
-		c.Git = &GitConfig{}
-	}
-	c.Git.QueueRepo = queueRepo
-	if c.Git.CloneDir == "" {
-		c.Git.CloneDir = GetPaths().QueueRepoDir
-	}
-	if c.Git.PollIntervalMS == 0 {
-		c.Git.PollIntervalMS = 10_000
-	}
-	if c.Git.Branch == "" {
-		c.Git.Branch = "main"
-	}
-	if c.Git.AuthorName == "" {
-		c.Git.AuthorName = "xmuggle bot"
-	}
-	if c.Git.AuthorEmail == "" {
-		c.Git.AuthorEmail = "xmuggle@localhost"
-	}
+// DaemonConfig is the global ~/.xmuggle/daemon.json.
+type DaemonConfig struct {
+	Repos []string `json:"repos"` // absolute paths to repo roots
 }
 
-// SetAge stores the age identity.
-func (c *Config) SetAge(identityFile, pubkey string) {
-	c.Age = &AgeConfig{IdentityFile: identityFile, Pubkey: pubkey}
+// LoadDaemonConfig reads ~/.xmuggle/daemon.json.
+func LoadDaemonConfig() (*DaemonConfig, error) {
+	p := GetDaemonPaths()
+	data, err := os.ReadFile(p.ConfigFile)
+	if os.IsNotExist(err) {
+		return &DaemonConfig{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	cfg := &DaemonConfig{}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }
 
-// RecipientPubkey returns the configured pubkey for a hostname, or "" if missing.
-func (c *Config) RecipientPubkey(hostname string) string {
-	for _, r := range c.Recipients {
-		if r.Hostname == hostname {
-			return r.Pubkey
+// SaveDaemonConfig writes ~/.xmuggle/daemon.json.
+func SaveDaemonConfig(cfg *DaemonConfig) error {
+	p := GetDaemonPaths()
+	if err := os.MkdirAll(filepath.Dir(p.ConfigFile), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(p.ConfigFile, data, 0o644)
+}
+
+// RegisterRepo adds a repo path to daemon.json (idempotent).
+func RegisterRepo(repoRoot string) error {
+	if err := EnsureDaemonDirs(); err != nil {
+		return err
+	}
+	cfg, err := LoadDaemonConfig()
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return err
+	}
+	for _, r := range cfg.Repos {
+		if r == abs {
+			return nil // already registered
 		}
 	}
-	return ""
-}
-
-// UpsertRecipient adds or replaces a recipient.
-func (c *Config) UpsertRecipient(r Recipient) {
-	for i, existing := range c.Recipients {
-		if existing.Hostname == r.Hostname {
-			c.Recipients[i] = r
-			return
-		}
-	}
-	c.Recipients = append(c.Recipients, r)
+	cfg.Repos = append(cfg.Repos, abs)
+	return SaveDaemonConfig(cfg)
 }

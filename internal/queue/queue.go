@@ -28,6 +28,8 @@ type Task struct {
 	Message   string     `json:"message,omitempty"`
 	Timestamp int64      `json:"timestamp"`
 	Status    TaskStatus `json:"status"`
+	Target    string     `json:"target,omitempty"` // hostname of peer to process this
+	Sender    string     `json:"sender,omitempty"` // hostname of sender
 }
 
 type Result struct {
