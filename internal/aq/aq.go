@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // ScriptsDir returns the agent-queue scripts directory. Override via AQ_SCRIPTS.
@@ -90,8 +91,13 @@ func Clone(repoURL, agentID, parentDir string) (*CloneInfo, error) {
 	if r.code != 0 {
 		return nil, fmt.Errorf("aq clone exited %d: %s%s", r.code, r.stdout, r.stderr)
 	}
+	// stdout may contain status lines before the JSON object
+	out := r.stdout
+	if idx := strings.Index(out, "{"); idx >= 0 {
+		out = out[idx:]
+	}
 	info := &CloneInfo{}
-	if err := json.Unmarshal([]byte(r.stdout), info); err != nil {
+	if err := json.Unmarshal([]byte(out), info); err != nil {
 		return nil, err
 	}
 	return info, nil
