@@ -96,7 +96,10 @@ func listDirImages(dir string) ([]Image, error) {
 	}
 	var out []Image
 	for _, e := range entries {
-		if !e.Type().IsRegular() {
+		// Accept regular files and ModeIrregular (iCloud-evicted "dataless"
+		// files on macOS with Desktop & Documents sync).
+		typ := e.Type()
+		if !typ.IsRegular() && typ&os.ModeIrregular == 0 {
 			continue
 		}
 		if strings.HasPrefix(e.Name(), ".") {
