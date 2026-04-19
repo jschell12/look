@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -326,61 +325,7 @@ func cmdSend(rawArgs []string) {
 		_ = images.MarkProcessed(sp)
 	}
 
-	// Poll for result
-	fmt.Println("Waiting for result...")
-	resultDir := filepath.Join(p.ResultsDir, taskID)
-	resultFile := filepath.Join(resultDir, "result.json")
-
-	timeout := time.After(10 * time.Minute)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			die("Timed out waiting for result (10m)")
-		case <-ticker.C:
-			_ = gitops.PullRebase(repoRoot)
-			if _, err := os.Stat(resultFile); err == nil {
-				r, err := queue.ReadResult(resultDir)
-				if err != nil {
-					die("read result: %v", err)
-				}
-				printResult(taskID, r)
-
-				// Pull latest code
-				fmt.Printf("\nPulling latest...\n")
-				cmd := exec.Command("git", "pull")
-				cmd.Dir = repoRoot
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				_ = cmd.Run()
-				return
-			}
-			fmt.Print(".")
-		}
-	}
-}
-
-func printResult(taskID string, r *queue.Result) {
-	fmt.Printf("\n\n--- Task %s ---\n", taskID)
-	if r.Status == "success" {
-		fmt.Println("Fix applied successfully!")
-		if r.Summary != "" {
-			fmt.Println()
-			fmt.Println(r.Summary)
-		}
-		if r.PRUrl != "" {
-			fmt.Println("PR:", r.PRUrl)
-		}
-		if r.Branch != "" {
-			fmt.Println("Branch:", r.Branch)
-		}
-	} else {
-		fmt.Fprintln(os.Stderr, "Agent reported an error:")
-		fmt.Fprintln(os.Stderr, r.Summary)
-		os.Exit(1)
-	}
+	fmt.Printf("Task %s sent. The daemon will process it.\n", taskID)
 }
 
 func selectPeer(peersDir, selfHostname string) string {
