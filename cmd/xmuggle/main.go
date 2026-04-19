@@ -45,6 +45,7 @@ List (view available images):
 Subcommands:
   init               Set up xmuggle in the current git repo
                      Creates .xmuggle/ directory, registers peer, installs daemon
+    --no-daemon        Skip daemon installation
 
   peers              Show registered peers for this repo
 
@@ -111,7 +112,7 @@ func main() {
 	case "list":
 		cmdList(os.Args[2:])
 	case "init":
-		cmdInit()
+		cmdInit(os.Args[2:])
 	case "peers":
 		cmdPeers()
 	case "rm":
@@ -128,7 +129,14 @@ func main() {
 // init
 // ────────────────────────────────────────────────────────────────────
 
-func cmdInit() {
+func cmdInit(args []string) {
+	noDaemon := false
+	for _, a := range args {
+		if a == "--no-daemon" {
+			noDaemon = true
+		}
+	}
+
 	repoRoot := mustRepoRoot()
 	hostname := mustHostname()
 
@@ -168,13 +176,16 @@ func cmdInit() {
 		die("register repo: %v", err)
 	}
 
-	// Install daemon
-	fmt.Println("Installing daemon...")
-	if err := daemoninstall.Install(); err != nil {
-		fmt.Fprintf(os.Stderr, "note: daemon install failed: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Fallback: run `make daemon-install` from the xmuggle repo.")
+	if noDaemon {
+		fmt.Println("Skipping daemon install (--no-daemon)")
 	} else {
-		fmt.Println("Daemon installed and running.")
+		fmt.Println("Installing daemon...")
+		if err := daemoninstall.Install(); err != nil {
+			fmt.Fprintf(os.Stderr, "note: daemon install failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Fallback: run `make daemon-install` from the xmuggle repo.")
+		} else {
+			fmt.Println("Daemon installed and running.")
+		}
 	}
 
 	fmt.Println()

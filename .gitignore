@@ -2,5 +2,5 @@ bin/
 *.log
 .DS_Store
 
-xmuggle
-xmuggled
+/xmuggle
+/xmuggled
