@@ -158,6 +158,10 @@ app.whenReady().then(() => {
   xmuggleDir = path.join(repoRoot, '.xmuggle');
 
   ipcMain.handle('get-images', () => getImages());
+  ipcMain.handle('delete-image', (_, imgPath) => {
+    try { fs.unlinkSync(imgPath); } catch {}
+    return getImages();
+  });
 
   createWindow();
 });

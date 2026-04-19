@@ -33,6 +33,17 @@ function render(images) {
     badge.textContent = BADGE_LABELS[img.status] || img.status;
     card.appendChild(badge);
 
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-btn';
+    deleteBtn.textContent = '\u00d7';
+    deleteBtn.title = 'Delete screenshot';
+    deleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const images = await window.xmuggle.deleteImage(img.path);
+      render(images);
+    });
+    card.appendChild(deleteBtn);
+
     const name = document.createElement('div');
     name.className = 'name';
     name.textContent = img.name;
