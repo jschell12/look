@@ -120,6 +120,10 @@ async function initApiKey() {
   }
 }
 
+document.getElementById('api-key-get').addEventListener('click', () => {
+  window.xmuggle.openExternal('https://console.anthropic.com/settings/keys');
+});
+
 apiKeySave.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
   if (!key) return;

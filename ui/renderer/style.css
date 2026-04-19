@@ -60,6 +60,21 @@ header h1 {
   font-size: 12px;
 }
 
+.link-btn {
+  background: none;
+  border: 1px solid #0f3460;
+  color: #0984e3;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  background: #0f3460;
+  color: #fff;
+}
+
 #grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

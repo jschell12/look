@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('xmuggle', {
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
   setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
   sendToApi: (imagePaths, message) => ipcRenderer.invoke('send-to-api', imagePaths, message),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   onImagesUpdated: (callback) => {
     ipcRenderer.on('images-updated', (_, images) => callback(images));
   },

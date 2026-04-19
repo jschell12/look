@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -166,6 +166,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('has-api-key', () => api.hasApiKey());
   ipcMain.handle('set-api-key', (_, key) => { api.setApiKey(key); return true; });
+  ipcMain.handle('open-external', (_, url) => shell.openExternal(url));
   ipcMain.handle('send-to-api', async (_, imagePaths, message) => {
     return api.analyzeAndFix({ imagePaths, repoRoot, message });
   });
