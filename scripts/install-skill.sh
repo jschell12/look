@@ -40,25 +40,28 @@ done
 # Ensure ~/.local/bin is on PATH in shell profile
 if ! is_on_path "$BIN_DIR"; then
   PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
-  # Find the right rc file
-  RC_FILE=""
-  if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$(basename "$SHELL")" == "zsh" ]]; then
-    RC_FILE="$HOME/.zshrc"
-  elif [[ -f "$HOME/.bashrc" ]]; then
-    RC_FILE="$HOME/.bashrc"
-  elif [[ -f "$HOME/.bash_profile" ]]; then
-    RC_FILE="$HOME/.bash_profile"
-  else
-    RC_FILE="$HOME/.profile"
+  # Add to all relevant rc files so it works regardless of shell
+  RC_FILES=()
+  [[ -f "$HOME/.zshrc" ]]       && RC_FILES+=("$HOME/.zshrc")
+  [[ -f "$HOME/.bashrc" ]]      && RC_FILES+=("$HOME/.bashrc")
+  [[ -f "$HOME/.bash_profile" ]] && RC_FILES+=("$HOME/.bash_profile")
+  # If none exist, create for the login shell
+  if [[ ${#RC_FILES[@]} -eq 0 ]]; then
+    if [[ "$(basename "$SHELL")" == "zsh" ]]; then
+      RC_FILES+=("$HOME/.zshrc")
+    else
+      RC_FILES+=("$HOME/.bash_profile")
+    fi
   fi
 
-  # Add to rc if not already there
-  if ! grep -qF '.local/bin' "$RC_FILE" 2>/dev/null; then
-    echo "" >> "$RC_FILE"
-    echo '# Added by xmuggle install' >> "$RC_FILE"
-    echo "$PATH_LINE" >> "$RC_FILE"
-    echo "Added ~/.local/bin to PATH in $RC_FILE"
-  fi
+  for RC_FILE in "${RC_FILES[@]}"; do
+    if ! grep -qF '.local/bin' "$RC_FILE" 2>/dev/null; then
+      echo "" >> "$RC_FILE"
+      echo '# Added by xmuggle install' >> "$RC_FILE"
+      echo "$PATH_LINE" >> "$RC_FILE"
+      echo "Added ~/.local/bin to PATH in $RC_FILE"
+    fi
+  done
 
   # Also export for the current session
   export PATH="$BIN_DIR:$PATH"
