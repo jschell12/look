@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const API_KEY_FILE = path.join(os.homedir(), '.xmuggle', 'api-key');
 const GH_TOKEN_FILE = path.join(os.homedir(), '.xmuggle', 'gh-token');
 const MODEL_FILE = path.join(os.homedir(), '.xmuggle', 'model');
+const HISTORY_DIR = path.join(os.homedir(), '.xmuggle', 'history');
 const WORK_DIR = path.join(os.homedir(), '.xmuggle', 'work');
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
@@ -117,6 +118,47 @@ function gitEnv() {
     GIT_ASKPASS: 'echo',
     GIT_TERMINAL_PROMPT: '0',
   };
+}
+
+// ── Project history (cross-screenshot memory) ──
+
+const MAX_HISTORY_ENTRIES = 20;
+
+function historyFile(projectPath) {
+  const slug = path.basename(projectPath);
+  return path.join(HISTORY_DIR, `${slug}.json`);
+}
+
+function loadHistory(projectPath) {
+  try {
+    return JSON.parse(fs.readFileSync(historyFile(projectPath), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function appendHistory(projectPath, entry) {
+  fs.mkdirSync(HISTORY_DIR, { recursive: true });
+  const history = loadHistory(projectPath);
+  history.push(entry);
+  // Keep only the most recent entries
+  const trimmed = history.slice(-MAX_HISTORY_ENTRIES);
+  fs.writeFileSync(historyFile(projectPath), JSON.stringify(trimmed, null, 2) + '\n');
+}
+
+function formatHistoryForPrompt(history) {
+  if (!history.length) return '';
+  let text = '\n\n## Previous fixes in this project\n';
+  for (const entry of history) {
+    text += `\n### ${entry.date}\n`;
+    if (entry.userMessage) text += `User: ${entry.userMessage}\n`;
+    text += `Summary: ${entry.summary}\n`;
+    if (entry.filesChanged && entry.filesChanged.length) {
+      text += `Files: ${entry.filesChanged.join(', ')}\n`;
+    }
+  }
+  text += '\nUse this history as context — you may be fixing related issues or continuing prior work.\n';
+  return text;
 }
 
 function mediaType(filePath) {
@@ -281,6 +323,13 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
       contextText += `--- ${f.path} ---\n${f.content}\n\n`;
     }
 
+    // Include project history for cross-screenshot memory
+    const history = loadHistory(projectPath);
+    if (history.length) {
+      log(`Including ${history.length} previous fix(es) as context`);
+      contextText += formatHistoryForPrompt(history);
+    }
+
     if (message) {
       contextText += `\nUser context: ${message}\n`;
     }
@@ -320,6 +369,12 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
 
   if (edits.length === 0) {
     log('No edits returned — cleaning up');
+    appendHistory(projectPath, {
+      date: new Date().toISOString(),
+      userMessage: message || '',
+      summary: summary || 'No changes needed.',
+      filesChanged: [],
+    });
     fs.rmSync(cloneDir, { recursive: true, force: true });
     return { status: 'no_changes', summary: summary || 'No changes needed.', messages: updatedMessages, conversation };
   }
@@ -360,6 +415,14 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
       conversation,
     };
   }
+
+  // Save to project history for future context
+  appendHistory(projectPath, {
+    date: new Date().toISOString(),
+    userMessage: message || '',
+    summary: commitSummary,
+    filesChanged: changedFiles,
+  });
 
   // Clean up clone
   log('Cleaning up temp clone…');
