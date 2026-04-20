@@ -177,7 +177,7 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   if (!projectPath) throw new Error('No project specified');
 
   // Derive repo slug from project's git remote
-  log('Resolving repo from git remote\u2026');
+  log('Resolving repo from git remote…');
   let repo;
   try {
     const remote = execSync('git remote get-url origin', { cwd: projectPath, encoding: 'utf8' }).trim();
@@ -193,7 +193,7 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   const cloneDir = path.join(WORK_DIR, `${repo.replace(/\//g, '-')}-${id}`);
   const branch = `xmuggle-fix-${id}`;
 
-  log(`Cloning ${repo} (shallow)\u2026`);
+  log(`Cloning ${repo} (shallow)…`);
   try {
     execSync(`git clone --depth 1 ${repoURL(repo)} "${cloneDir}"`, { encoding: 'utf8', stdio: 'pipe', env: gitEnv() });
   } catch (e) {
@@ -202,18 +202,44 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   log('Clone complete');
 
   // Create branch
-  log(`Creating branch ${branch}\u2026`);
+  log(`Creating branch ${branch}…`);
   execSync(`git checkout -b ${branch}`, { cwd: cloneDir, stdio: 'pipe' });
 
   // Build messages array
   let messages;
   if (priorMessages && priorMessages.length > 0) {
-    // Continue conversation — append a new user message
-    messages = [...priorMessages, { role: 'user', content: [{ type: 'text', text: message || 'Please continue fixing.' }] }];
-    log('Continuing conversation\u2026');
+    // Continue conversation — ensure proper tool call/result pairing
+    messages = [...priorMessages];
+    
+    // Check if the last assistant message has tool calls that need results
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role === 'assistant' && Array.isArray(lastMessage.content)) {
+      const toolCalls = lastMessage.content.filter(block => block.type === 'tool_use');
+      if (toolCalls.length > 0) {
+        // Add tool results for any previous tool calls
+        const toolResults = toolCalls.map(toolCall => ({
+          type: 'tool_result',
+          tool_use_id: toolCall.id,
+          content: 'Tool execution completed successfully.'
+        }));
+        
+        messages.push({
+          role: 'user',
+          content: toolResults
+        });
+      }
+    }
+    
+    // Add the new user message
+    messages.push({ 
+      role: 'user', 
+      content: [{ type: 'text', text: message || 'Please continue fixing.' }] 
+    });
+    
+    log('Continuing conversation…');
   } else {
     // First message — include images + repo context
-    log(`Encoding ${imagePaths.length} image(s)\u2026`);
+    log(`Encoding ${imagePaths.length} image(s)…`);
     const imageBlocks = imagePaths.map(p => ({
       type: 'image',
       source: {
@@ -223,7 +249,7 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
       },
     }));
 
-    log('Gathering repo context (file list + source files)\u2026');
+    log('Gathering repo context (file list + source files)…');
     const ctx = getRepoContext(cloneDir);
     log(`Found ${ctx.files.length} tracked files, reading ${ctx.fileContents.length} source files`);
     let contextText = `Repository: ${repo}\n\nFiles in repo:\n${ctx.files.join('\n')}\n\n`;
@@ -245,10 +271,10 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   }
 
   // Call API
-  log(`Calling Claude API (${MODEL})\u2026`);
+  log(`Calling Claude API (${MODEL})…`);
   const result = await callClaude(messages);
 
-  log('API response received, parsing\u2026');
+  log('API response received, parsing…');
 
   // Extract edits and text from response
   const edits = [];
@@ -270,20 +296,20 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   const conversation = buildConversation(updatedMessages);
 
   if (edits.length === 0) {
-    log('No edits returned \u2014 cleaning up');
+    log('No edits returned — cleaning up');
     fs.rmSync(cloneDir, { recursive: true, force: true });
     return { status: 'no_changes', summary: summary || 'No changes needed.', messages: updatedMessages, conversation };
   }
 
   // Apply edits
-  log(`Applying ${edits.length} edit(s)\u2026`);
+  log(`Applying ${edits.length} edit(s)…`);
   const changedFiles = [];
   for (const edit of edits) {
     const fullPath = path.join(cloneDir, edit.path);
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, edit.content);
     changedFiles.push(edit.path);
-    log(`  \u270e ${edit.path}: ${edit.summary}`);
+    log(`  ✎ ${edit.path}: ${edit.summary}`);
   }
 
   // Commit, push, create PR
@@ -292,17 +318,17 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   let prUrl = '';
 
   try {
-    log('Staging and committing\u2026');
+    log('Staging and committing…');
     for (const f of changedFiles) {
       execSync(`git add -- "${f}"`, { cwd: cloneDir, stdio: 'pipe' });
     }
     execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: cloneDir, stdio: 'pipe' });
 
-    log(`Pushing branch ${branch}\u2026`);
+    log(`Pushing branch ${branch}…`);
     execSync(`git push -u origin ${branch}`, { cwd: cloneDir, stdio: 'pipe', env: gitEnv() });
 
     // Create PR via gh CLI
-    log('Creating pull request\u2026');
+    log('Creating pull request…');
     const prBody = `## Screenshot fix\n\n${summary}\n\n## Changes\n${changedFiles.map(f => '- ' + f).join('\n')}\n\n---\nAutomated fix by xmuggle`;
     const prOutput = execSync(
       `gh pr create --head "${branch}" --title "${commitMsg.replace(/"/g, '\\"')}" --body "${prBody.replace(/"/g, '\\"')}"`,
@@ -325,7 +351,7 @@ async function analyzeAndFix({ imagePaths, projectPath, message, onProgress, pri
   }
 
   // Clean up clone
-  log('Cleaning up temp clone\u2026');
+  log('Cleaning up temp clone…');
   fs.rmSync(cloneDir, { recursive: true, force: true });
   log('Done!');
 
@@ -345,7 +371,7 @@ function buildConversation(messages) {
   const conv = [];
   for (const msg of messages) {
     if (msg.role === 'user') {
-      // Extract user text (skip images and repo context)
+      // Extract user text (skip images, repo context, and tool results)
       let text = '';
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
@@ -358,6 +384,7 @@ function buildConversation(messages) {
               text = block.text;
             }
           }
+          // Skip tool_result blocks in conversation display
         }
       } else {
         text = msg.content;
