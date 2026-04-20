@@ -103,6 +103,38 @@ addProjectBtn.addEventListener('click', async () => {
   }
 });
 
+// ── Helper function to make links clickable ──
+
+function makeLinksClickable(text) {
+  // Regular expression to match URLs
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  
+  const container = document.createElement('span');
+  
+  parts.forEach(part => {
+    if (urlRegex.test(part)) {
+      const link = document.createElement('a');
+      link.href = part;
+      link.textContent = part;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.style.color = '#74b9ff';
+      link.style.textDecoration = 'underline';
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.xmuggle.openExternal(part);
+      });
+      container.appendChild(link);
+    } else {
+      container.appendChild(document.createTextNode(part));
+    }
+  });
+  
+  return container;
+}
+
 // ── Images ──
 
 function render(images) {
@@ -170,7 +202,11 @@ function render(images) {
       for (const msg of img.conversation) {
         const msgEl = document.createElement('div');
         msgEl.className = `conv-msg conv-${msg.role}`;
-        msgEl.textContent = msg.text;
+        
+        // Use makeLinksClickable for message content
+        const contentEl = makeLinksClickable(msg.text);
+        msgEl.appendChild(contentEl);
+        
         convEl.appendChild(msgEl);
       }
 
@@ -334,6 +370,12 @@ async function sendImage(img, projectPath, message) {
     if (result.status === 'success') {
       const prInfo = result.prUrl ? ` PR: ${result.prUrl}` : '';
       showToast(`Fixed: ${result.summary}${prInfo}`, false);
+      
+      // Add the success message to the conversation
+      if (result.prUrl) {
+        const successMessage = `Fixed: ${result.summary} PR: ${result.prUrl}`;
+        await addToConversation(img.path, 'assistant', successMessage);
+      }
     } else if (result.status === 'no_changes') {
       showToast(result.summary, false);
     } else {
@@ -362,6 +404,12 @@ async function sendFollowup(img, message) {
     if (result.status === 'success') {
       const prInfo = result.prUrl ? ` PR: ${result.prUrl}` : '';
       showToast(`Fixed: ${result.summary}${prInfo}`, false);
+      
+      // Add the success message to the conversation
+      if (result.prUrl) {
+        const successMessage = `Fixed: ${result.summary} PR: ${result.prUrl}`;
+        await addToConversation(img.path, 'assistant', successMessage);
+      }
     } else if (result.status === 'no_changes') {
       showToast(result.summary, false);
     } else {
@@ -375,6 +423,13 @@ async function sendFollowup(img, message) {
   delete progressLogs[img.path];
   const updated = await window.xmuggle.getImages();
   render(updated);
+}
+
+// Helper function to add messages to conversation (this would need to be implemented in the backend)
+async function addToConversation(imgPath, role, text) {
+  // This is a placeholder - the actual implementation would need to be added
+  // to store the message in the conversation history
+  console.log(`Adding to conversation for ${imgPath}: [${role}] ${text}`);
 }
 
 // ── API Key ──
