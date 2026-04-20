@@ -3,11 +3,7 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "daemon": "node daemon.js start",
-    "daemon:stop": "node daemon.js stop",
-    "daemon:status": "node daemon.js status",
-    "daemon:run": "node daemon.js run"
+    "start": "electron ."
   },
   "devDependencies": {
     "electron": "^33.0.0"

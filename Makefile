@@ -1,4 +1,4 @@
-.PHONY: install start daemon daemon-stop daemon-status daemon-log
+.PHONY: install start build daemon daemon-stop daemon-status daemon-log
 
 install:
 	npm install
@@ -6,14 +6,17 @@ install:
 start:
 	npm start
 
-daemon:
-	node daemon.js start
+build:
+	go build -o xmuggled ./cmd/xmuggled/
+
+daemon: build
+	./xmuggled start
 
 daemon-stop:
-	node daemon.js stop
+	./xmuggled stop
 
 daemon-status:
-	node daemon.js status
+	./xmuggled status
 
 daemon-log:
-	node daemon.js log 50
+	./xmuggled log 50
