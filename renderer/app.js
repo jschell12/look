@@ -1,14 +1,8 @@
 const grid = document.getElementById('grid');
 const count = document.getElementById('count');
-const apiKeySection = document.getElementById('api-key-section');
-const apiKeyInput = document.getElementById('api-key-input');
-const apiKeySave = document.getElementById('api-key-save');
-const apiStatus = document.getElementById('api-status');
-const ghTokenSection = document.getElementById('gh-token-section');
-const ghTokenInput = document.getElementById('gh-token-input');
-const ghTokenSave = document.getElementById('gh-token-save');
-const ghStatus = document.getElementById('gh-status');
 const modelSelect = document.getElementById('model-select');
+const relaySelect = document.getElementById('relay-select');
+const relayStatusEl = document.getElementById('relay-status');
 const toast = document.getElementById('toast');
 const projectTabs = document.getElementById('project-tabs');
 const addProjectBtn = document.getElementById('add-project');
@@ -353,9 +347,9 @@ function promptAndSend(img) {
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
   // Show relay button if relay host is configured
-  const relayHost = relayInput.value.trim();
+  const relayHost = relaySelect.value;
   const relayBtn = document.getElementById('modal-relay');
-  if (relayHost) {
+  if (relayHost && relayHost !== '_scan') {
     relayBtn.style.display = '';
     relayBtn.textContent = 'Relay to ' + relayHost;
     relayBtn.addEventListener('click', () => {
@@ -475,114 +469,61 @@ async function relayImage(img, projectPath, message) {
   render(updated);
 }
 
-// ── API Key ──
+// ── Relay Network ──
 
-async function initApiKey() {
-  const hasKey = await window.xmuggle.hasApiKey();
-  if (hasKey) {
-    apiStatus.innerHTML = '';
-    const label = document.createElement('span');
-    label.textContent = 'API key set ';
-    label.style.color = '#00b894';
-    const resetBtn = document.createElement('button');
-    resetBtn.className = 'link-btn';
-    resetBtn.style.fontSize = '11px';
-    resetBtn.textContent = 'Reset';
-    resetBtn.addEventListener('click', async () => {
-      await window.xmuggle.resetApiKey();
-      initApiKey();
-    });
-    apiStatus.appendChild(label);
-    apiStatus.appendChild(resetBtn);
-    apiKeySection.style.display = 'none';
-    apiStatus.style.display = '';
-  } else {
-    apiKeySection.style.display = 'flex';
-    apiStatus.style.display = 'none';
-  }
-}
-
-document.getElementById('api-key-get').addEventListener('click', () => {
-  window.xmuggle.openExternal('https://console.anthropic.com/settings/keys');
-});
-
-apiKeySave.addEventListener('click', async () => {
-  const key = apiKeyInput.value.trim();
-  if (!key) return;
-  await window.xmuggle.setApiKey(key);
-  apiKeyInput.value = '';
-  apiKeySection.style.display = 'none';
-  apiStatus.style.display = '';
-  apiStatus.textContent = 'API key set';
-  apiStatus.style.color = '#00b894';
-  showToast('API key saved', false);
-});
-
-apiKeyInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') apiKeySave.click();
-});
-
-// ── GitHub Token ──
-
-async function initGhToken() {
-  const hasToken = await window.xmuggle.hasGhToken();
-  if (hasToken) {
-    ghStatus.innerHTML = '';
-    const label = document.createElement('span');
-    label.textContent = 'GitHub PAT set ';
-    label.style.color = '#00b894';
-    const resetBtn = document.createElement('button');
-    resetBtn.className = 'link-btn';
-    resetBtn.style.fontSize = '11px';
-    resetBtn.textContent = 'Reset';
-    resetBtn.addEventListener('click', async () => {
-      await window.xmuggle.resetGhToken();
-      initGhToken();
-    });
-    ghStatus.appendChild(label);
-    ghStatus.appendChild(resetBtn);
-    ghTokenSection.style.display = 'none';
-    ghStatus.style.display = '';
-  } else {
-    ghTokenSection.style.display = 'flex';
-    ghStatus.style.display = 'none';
-  }
-}
-
-ghTokenSave.addEventListener('click', async () => {
-  const token = ghTokenInput.value.trim();
-  if (!token) return;
-  await window.xmuggle.setGhToken(token);
-  ghTokenInput.value = '';
-  initGhToken();
-  showToast('GitHub PAT saved', false);
-});
-
-ghTokenInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') ghTokenSave.click();
-});
-
-// ── Relay Host ──
-
-const relayInput = document.getElementById('relay-input');
-const relayStatusEl = document.getElementById('relay-status');
+let discoveredHosts = [];
 
 async function initRelay() {
-  const host = await window.xmuggle.getRelayHost();
-  if (host) {
-    relayInput.value = host;
-    relayStatusEl.textContent = '';
-    relayStatusEl.style.color = '#00b894';
+  const saved = await window.xmuggle.getRelayHost();
+
+  // Add default options
+  relaySelect.innerHTML = '<option value="">Local (no relay)</option><option value="_scan">Scanning network...</option>';
+  if (saved) relaySelect.value = saved;
+
+  // Scan network in background
+  try {
+    const hosts = await window.xmuggle.scanNetwork();
+    discoveredHosts = hosts;
+    relaySelect.innerHTML = '<option value="">Local (no relay)</option>';
+    for (const h of hosts) {
+      const opt = document.createElement('option');
+      opt.value = h.ip;
+      opt.textContent = `${h.hostname} (${h.ip})`;
+      if (h.ip === saved) opt.selected = true;
+      relaySelect.appendChild(opt);
+    }
+    if (hosts.length === 0) {
+      relayStatusEl.textContent = 'No peers found';
+      relayStatusEl.style.color = '#888';
+    } else {
+      relayStatusEl.textContent = `${hosts.length} peer(s)`;
+      relayStatusEl.style.color = '#00b894';
+    }
+    // Add rescan option
+    const rescan = document.createElement('option');
+    rescan.value = '_scan';
+    rescan.textContent = 'Rescan...';
+    relaySelect.appendChild(rescan);
+  } catch {
+    relaySelect.innerHTML = '<option value="">Local (no relay)</option>';
+    relayStatusEl.textContent = 'Scan failed';
+    relayStatusEl.style.color = '#d63031';
   }
 }
 
-relayInput.addEventListener('change', async () => {
-  const host = relayInput.value.trim();
-  await window.xmuggle.setRelayHost(host);
-  if (host) {
-    showToast(`Relay: ${host}`, false);
+relaySelect.addEventListener('change', async () => {
+  const val = relaySelect.value;
+  if (val === '_scan') {
+    relayStatusEl.textContent = 'Scanning...';
+    relayStatusEl.style.color = '#f0a500';
+    await initRelay();
+    return;
+  }
+  await window.xmuggle.setRelayHost(val);
+  if (val) {
+    showToast('Relay: ' + val, false);
   } else {
-    showToast('Relay disabled', false);
+    showToast('Relay disabled (local mode)', false);
   }
 });
 
@@ -630,8 +571,6 @@ window.xmuggle.onTaskProgress((imgPath, msg) => {
     refresh();
   }
 });
-initApiKey();
-initGhToken();
 initModelSelect();
 initRelay();
 loadProjects();

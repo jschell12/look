@@ -203,6 +203,44 @@ app.whenReady().then(() => {
   // Relay
   ipcMain.handle('get-relay-host', () => api.getRelayHost());
   ipcMain.handle('set-relay-host', (_, host) => { api.setRelayHost(host); return true; });
+
+  // Scan local network for xmuggle relay servers
+  ipcMain.handle('scan-network', async () => {
+    const nets = os.networkInterfaces();
+    const localIPs = [];
+    for (const iface of Object.values(nets)) {
+      for (const cfg of iface) {
+        if (cfg.family === 'IPv4' && !cfg.internal) localIPs.push(cfg.address);
+      }
+    }
+    if (!localIPs.length) return [];
+
+    const myIP = localIPs[0];
+    const subnet = myIP.split('.').slice(0, 3).join('.');
+    const found = [];
+
+    const probe = async (ip) => {
+      if (ip === myIP) return; // skip self
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 500);
+      try {
+        const resp = await fetch(`http://${ip}:${SERVER_PORT}/status`, { signal: controller.signal });
+        if (resp.ok) {
+          const data = await resp.json();
+          found.push({ ip, hostname: data.hostname || ip, projects: data.projects || [] });
+        }
+      } catch {} finally { clearTimeout(timer); }
+    };
+
+    // Scan 1-254 in parallel batches
+    const ips = [];
+    for (let i = 1; i <= 254; i++) ips.push(`${subnet}.${i}`);
+    const batchSize = 50;
+    for (let i = 0; i < ips.length; i += batchSize) {
+      await Promise.all(ips.slice(i, i + batchSize).map(probe));
+    }
+    return found;
+  });
   ipcMain.handle('send-to-relay', async (_, imagePath, project, message) => {
     const host = api.getRelayHost();
     if (!host) throw new Error('No relay host configured');
@@ -303,7 +341,7 @@ app.whenReady().then(() => {
 
     if (req.method === 'GET' && req.url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', projects: listProjects() }));
+      res.end(JSON.stringify({ status: 'ok', hostname: os.hostname(), projects: listProjects() }));
       return;
     }
 
