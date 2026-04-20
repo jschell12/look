@@ -9,12 +9,12 @@ const GH_TOKEN_FILE = path.join(os.homedir(), '.xmuggle', 'gh-token');
 const MODEL_FILE = path.join(os.homedir(), '.xmuggle', 'model');
 const WORK_DIR = path.join(os.homedir(), '.xmuggle', 'work');
 const API_URL = 'https://api.anthropic.com/v1/messages';
-const DEFAULT_MODEL = 'claude-sonnet-4-6-20250414';
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const MAX_TOKENS = 8192;
 
 const AVAILABLE_MODELS = [
-  { id: 'claude-opus-4-6-20250415', label: 'Opus 4.6' },
-  { id: 'claude-sonnet-4-6-20250414', label: 'Sonnet 4.6' },
+  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
   { id: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
 ];
