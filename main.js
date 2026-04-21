@@ -11,8 +11,7 @@ const PROJECTS_FILE = path.join(XMUGGLE_DIR, 'projects.json');
 const TASKS_FILE = path.join(XMUGGLE_DIR, 'tasks.json');
 const INBOX_DIR = path.join(XMUGGLE_DIR, 'inbox');
 const NOTES_DIR = path.join(XMUGGLE_DIR, 'notes');
-const SYNC_REPO_FILE = path.join(XMUGGLE_DIR, 'sync-repo');
-const SYNC_DIR = path.join(XMUGGLE_DIR, 'sync');
+const WORK_DIR = path.join(XMUGGLE_DIR, 'work');
 const SERVER_PORT = 24816;
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 const TEXT_EXTS = new Set(['.txt', '.md']);
@@ -153,116 +152,61 @@ function createNote(text) {
   return { path: full, name };
 }
 
-// ── Git Sync ──
+// ── Git Sync (per-project) ──
 
-function getSyncRepo() {
-  try { return fs.readFileSync(SYNC_REPO_FILE, 'utf8').trim(); } catch { return ''; }
-}
-
-function setSyncRepo(repo) {
-  fs.mkdirSync(XMUGGLE_DIR, { recursive: true });
-  fs.writeFileSync(SYNC_REPO_FILE, repo.trim() + '\n');
-}
-
-function ensureSyncClone() {
-  const repo = getSyncRepo();
-  if (!repo) return null;
-
-  const api = require('./api');
-  const env = api.gitEnv();
-
-  if (!fs.existsSync(path.join(SYNC_DIR, '.git'))) {
-    fs.mkdirSync(SYNC_DIR, { recursive: true });
-    try {
-      execSync(`git clone "${repo}" "${SYNC_DIR}"`, { stdio: 'pipe', env });
-    } catch (e) {
-      console.error('Sync clone failed:', e.message);
-      return null;
-    }
-  } else {
-    try {
-      execSync('git pull --ff-only', { cwd: SYNC_DIR, stdio: 'pipe', env });
-    } catch {}
+function getProjectRemote(projectPath) {
+  try {
+    return execSync('git remote get-url origin', { cwd: projectPath, encoding: 'utf8', stdio: 'pipe' }).trim();
+  } catch {
+    return null;
   }
-  return SYNC_DIR;
 }
 
-function gitSyncPush(imagePath, project, message) {
-  const syncDir = ensureSyncClone();
-  if (!syncDir) throw new Error('No sync repo configured or clone failed');
+function gitProjectPush(imagePaths, projectPath, message) {
+  const remoteUrl = getProjectRemote(projectPath);
+  if (!remoteUrl) throw new Error(`No git remote for ${projectPath}`);
 
   const api = require('./api');
   const env = api.gitEnv();
-  const filename = path.basename(imagePath);
-  const id = Date.now().toString(36);
-  const destDir = path.join(syncDir, 'pending', id);
-  fs.mkdirSync(destDir, { recursive: true });
+  const crypto = require('crypto');
+  const id = crypto.randomBytes(4).toString('hex');
+  const slug = path.basename(projectPath);
+  const cloneDir = path.join(WORK_DIR, `${slug}-${id}`);
 
-  // Copy image
-  fs.copyFileSync(imagePath, path.join(destDir, filename));
+  fs.mkdirSync(WORK_DIR, { recursive: true });
+
+  // Clone the project repo
+  execSync(`git clone --depth 1 "${remoteUrl}" "${cloneDir}"`, { stdio: 'pipe', env });
+
+  // Copy images into .xmuggle/inbox/
+  const inboxDir = path.join(cloneDir, '.xmuggle', 'inbox');
+  fs.mkdirSync(inboxDir, { recursive: true });
+
+  const filenames = [];
+  for (const imgPath of imagePaths) {
+    const filename = path.basename(imgPath);
+    fs.copyFileSync(imgPath, path.join(inboxDir, filename));
+    filenames.push(filename);
+  }
 
   // Write metadata
-  fs.writeFileSync(path.join(destDir, 'meta.json'), JSON.stringify({
-    filename,
-    project: project || '',
+  fs.writeFileSync(path.join(inboxDir, 'meta.json'), JSON.stringify({
+    filenames,
     message: message || '',
     from: os.hostname(),
     timestamp: new Date().toISOString(),
   }, null, 2) + '\n');
 
   // Commit and push
-  execSync('git add -A', { cwd: syncDir, stdio: 'pipe' });
-  execSync(`git commit -m "xmuggle: ${filename}"`, { cwd: syncDir, stdio: 'pipe' });
-  execSync('git push', { cwd: syncDir, stdio: 'pipe', env });
+  execSync('git add -A', { cwd: cloneDir, stdio: 'pipe' });
+  const commitMsg = `xmuggle: ${filenames.join(', ')}`;
+  execSync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, { cwd: cloneDir, stdio: 'pipe' });
+  execSync('git push origin', { cwd: cloneDir, stdio: 'pipe', env });
 
-  return { status: 'synced', id };
-}
+  // Clean up clone
+  fs.rmSync(cloneDir, { recursive: true, force: true });
 
-function gitSyncPull() {
-  const syncDir = ensureSyncClone();
-  if (!syncDir) return [];
-
-  const pendingDir = path.join(syncDir, 'pending');
-  if (!fs.existsSync(pendingDir)) return [];
-
-  const imported = [];
-  const entries = fs.readdirSync(pendingDir);
-
-  for (const entry of entries) {
-    const dir = path.join(pendingDir, entry);
-    const metaFile = path.join(dir, 'meta.json');
-    if (!fs.existsSync(metaFile)) continue;
-
-    try {
-      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-      // Skip our own submissions
-      if (meta.from === os.hostname()) continue;
-
-      const srcImage = path.join(dir, meta.filename);
-      if (!fs.existsSync(srcImage)) continue;
-
-      const destImage = path.join(INBOX_DIR, meta.filename);
-      if (fs.existsSync(destImage)) continue; // already imported
-
-      fs.mkdirSync(INBOX_DIR, { recursive: true });
-      fs.copyFileSync(srcImage, destImage);
-
-      if (meta.message) {
-        fs.writeFileSync(destImage + '.msg', meta.message);
-      }
-
-      if (meta.project) {
-        const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-        updateTaskStatus(destImage, meta.project, taskId, 'new', '', [
-          { role: 'user', text: meta.message || '' }
-        ]);
-      }
-
-      imported.push(meta.filename);
-    } catch {}
-  }
-
-  return imported;
+  return { status: 'synced', filenames };
 }
 
 // ── Window ──
@@ -397,18 +341,9 @@ app.whenReady().then(() => {
     return await resp.json();
   });
 
-  // Git sync
-  ipcMain.handle('get-sync-repo', () => getSyncRepo());
-  ipcMain.handle('set-sync-repo', (_, repo) => { setSyncRepo(repo); return true; });
-  ipcMain.handle('git-sync-push', (_, imagePath, project, message) => {
-    return gitSyncPush(imagePath, project, message);
-  });
-  ipcMain.handle('git-sync-pull', () => {
-    const imported = gitSyncPull();
-    if (imported.length > 0) {
-      try { win.webContents.send('images-updated', getDesktopImages()); } catch {}
-    }
-    return imported;
+  // Git sync (per-project)
+  ipcMain.handle('git-project-push', (_, imagePaths, projectPath, message) => {
+    return gitProjectPush(imagePaths, projectPath, message);
   });
 
   // Create a pasted-text note item.
@@ -506,18 +441,6 @@ app.whenReady().then(() => {
     console.log(`xmuggle relay server listening on port ${SERVER_PORT}`);
   });
 
-  // Poll git sync repo every 30s for new images
-  setInterval(() => {
-    if (!getSyncRepo()) return;
-    try {
-      const imported = gitSyncPull();
-      if (imported.length > 0) {
-        try { win.webContents.send('images-updated', getDesktopImages()); } catch {}
-      }
-    } catch (e) {
-      console.error('Git sync pull error:', e.message);
-    }
-  }, 30_000);
 });
 
 app.on('window-all-closed', () => app.quit());

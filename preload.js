@@ -15,9 +15,7 @@ contextBridge.exposeInMainWorld('xmuggle', {
   setRelayHost: (host) => ipcRenderer.invoke('set-relay-host', host),
   scanNetwork: () => ipcRenderer.invoke('scan-network'),
   sendToRelay: (imagePath, project, message) => ipcRenderer.invoke('send-to-relay', imagePath, project, message),
-  getSyncRepo: () => ipcRenderer.invoke('get-sync-repo'),
-  setSyncRepo: (repo) => ipcRenderer.invoke('set-sync-repo', repo),
-  gitSyncPush: (imagePath, project, message) => ipcRenderer.invoke('git-sync-push', imagePath, project, message),
+  gitProjectPush: (imagePaths, projectPath, message) => ipcRenderer.invoke('git-project-push', imagePaths, projectPath, message),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   onImagesUpdated: (callback) => {
     ipcRenderer.on('images-updated', (_, images) => callback(images));

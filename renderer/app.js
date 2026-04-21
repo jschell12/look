@@ -289,9 +289,6 @@ function promptAndSend(img) {
     projectOptions = '<option value="">No projects \u2014 add one first</option>';
   }
 
-  const relayHost = relaySelect.value;
-  const sendLabel = (relayHost && relayHost !== '_scan') ? 'Send' : 'Save';
-
   const modal = document.createElement('div');
   modal.id = 'context-modal';
   modal.className = 'modal-overlay';
@@ -305,7 +302,7 @@ function promptAndSend(img) {
       <textarea id="context-input" placeholder="What's wrong? What should be fixed?" rows="3"></textarea>
       <div class="modal-actions">
         <button id="modal-cancel" class="link-btn">Cancel</button>
-        <button id="modal-send" class="modal-send-btn" ${projects.length === 0 ? 'disabled' : ''}>${sendLabel}</button>
+        <button id="modal-send" class="modal-send-btn" ${projects.length === 0 ? 'disabled' : ''}>Send</button>
       </div>
     </div>
   `;
@@ -324,7 +321,10 @@ function promptAndSend(img) {
     const message = contextInput.value.trim();
     modal.remove();
 
-    if (relayHost && relayHost !== '_scan' && relayHost !== '') {
+    const relayHost = relaySelect.value;
+    if (relayHost === '_git') {
+      gitPush(img, projectPath, message);
+    } else if (relayHost && relayHost !== '_scan' && relayHost !== '') {
       relayImage(img, projectPath, message);
     } else {
       saveItem(img, projectPath, message);
@@ -348,36 +348,33 @@ async function saveItem(img, projectPath, message) {
   render(updated);
 }
 
-async function relayImage(img, projectPath, message) {
-  const relayHost = relaySelect.value;
-
-  // Ensure sync repo is configured before attempting git sync
-  if (relayHost === '_git') {
-    const syncRepo = await window.xmuggle.getSyncRepo();
-    if (!syncRepo) {
-      const repo = prompt('Enter git repo URL for sync (e.g. git@github.com:user/xmuggle-sync.git):');
-      if (repo) {
-        await window.xmuggle.setSyncRepo(repo);
-      } else {
-        return;
-      }
-    }
-  }
-
+async function gitPush(img, projectPath, message) {
   processingSet.add(img.path);
   const images = await window.xmuggle.getImages();
   render(images);
 
   try {
-    let result;
-    if (relayHost === '_git') {
-      result = await window.xmuggle.gitSyncPush(img.path, projectPath, message || '');
-      showToast('Synced via git: ' + (result.id || 'sent'), false);
-    } else {
-      result = await window.xmuggle.sendToRelay(img.path, projectPath, message || '');
-      showToast('Sent to relay: ' + (result.path || 'received'), false);
-    }
+    const result = await window.xmuggle.gitProjectPush([img.path], projectPath, message || '');
     processingSet.delete(img.path);
+    showToast('Pushed to ' + projectPath.split('/').pop(), false);
+  } catch (err) {
+    processingSet.delete(img.path);
+    showToast('Git push error: ' + err.message, true);
+  }
+
+  const updated = await window.xmuggle.getImages();
+  render(updated);
+}
+
+async function relayImage(img, projectPath, message) {
+  processingSet.add(img.path);
+  const images = await window.xmuggle.getImages();
+  render(images);
+
+  try {
+    const result = await window.xmuggle.sendToRelay(img.path, projectPath, message || '');
+    processingSet.delete(img.path);
+    showToast('Sent to relay: ' + (result.path || 'received'), false);
   } catch (err) {
     processingSet.delete(img.path);
     showToast('Relay error: ' + err.message, true);
@@ -393,13 +390,10 @@ let discoveredHosts = [];
 
 async function initRelay() {
   const saved = await window.xmuggle.getRelayHost();
-  const syncRepo = await window.xmuggle.getSyncRepo();
 
-  // Add default options
   relaySelect.innerHTML = '<option value="">Local (no relay)</option><option value="_scan">Scanning network...</option>';
   if (saved) relaySelect.value = saved;
 
-  // Scan network in background
   try {
     const hosts = await window.xmuggle.scanNetwork();
     discoveredHosts = hosts;
@@ -415,16 +409,14 @@ async function initRelay() {
     // Git sync option
     const gitOpt = document.createElement('option');
     gitOpt.value = '_git';
-    gitOpt.textContent = syncRepo ? 'Git sync' : 'Git sync (configure...)';
+    gitOpt.textContent = 'Git sync';
     relaySelect.appendChild(gitOpt);
 
     if (hosts.length === 0) {
       // Default to git sync when no local peers found
-      if (!saved || saved === '_scan') {
-        relaySelect.value = '_git';
-        await window.xmuggle.setRelayHost('_git');
-      }
-      relayStatusEl.textContent = 'No peers — using git sync';
+      relaySelect.value = '_git';
+      await window.xmuggle.setRelayHost('_git');
+      relayStatusEl.textContent = 'No peers \u2014 using git sync';
       relayStatusEl.style.color = '#f0a500';
     } else {
       relayStatusEl.textContent = hosts.length + ' peer(s)';
@@ -452,17 +444,6 @@ relaySelect.addEventListener('change', async () => {
     return;
   }
   if (val === '_git') {
-    const syncRepo = await window.xmuggle.getSyncRepo();
-    if (!syncRepo) {
-      const repo = prompt('Enter git repo URL for sync (e.g. git@github.com:user/xmuggle-sync.git):');
-      if (repo) {
-        await window.xmuggle.setSyncRepo(repo);
-        showToast('Git sync repo set: ' + repo, false);
-      } else {
-        relaySelect.value = '';
-        return;
-      }
-    }
     await window.xmuggle.setRelayHost('_git');
     showToast('Using git sync', false);
     return;
