@@ -331,20 +331,11 @@ app.whenReady().then(() => {
     return listProjects();
   });
 
-  // API key
-  ipcMain.handle('has-api-key', () => api.hasApiKey());
-  ipcMain.handle('set-api-key', (_, key) => { api.setApiKey(key); return true; });
-  ipcMain.handle('reset-api-key', () => { api.resetApiKey(); return true; });
-
   // GitHub token
   ipcMain.handle('has-gh-token', () => api.hasGhToken());
   ipcMain.handle('set-gh-token', (_, token) => { api.setGhToken(token); return true; });
   ipcMain.handle('reset-gh-token', () => { api.resetGhToken(); return true; });
 
-  // Model
-  ipcMain.handle('get-model', () => api.getModel());
-  ipcMain.handle('set-model', (_, modelId) => { api.setModel(modelId); return true; });
-  ipcMain.handle('list-models', () => api.listModels());
   ipcMain.handle('open-external', (_, url) => shell.openExternal(url));
 
   // Relay
@@ -426,73 +417,12 @@ app.whenReady().then(() => {
     return createNote(text);
   });
 
-  // Send
-  ipcMain.handle('send-to-api', async (event, imagePaths, projectPath, message, opts) => {
-    const imgPath = imagePaths[0];
-    const analyze = !opts || opts.analyze !== false; // default true
+  // Save item with project and message (no API call)
+  ipcMain.handle('save-item', (_, imagePath, projectPath, message) => {
     const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const win = BrowserWindow.fromWebContents(event.sender);
-
-    if (!analyze) {
-      // Just record the task with the user's message; don't call Claude.
-      const conversation = message ? [{ role: 'user', text: message }] : [];
-      updateTaskStatus(imgPath, projectPath, taskId, 'pending', '', conversation);
-      return { status: 'saved', summary: 'Saved without AI analysis.' };
-    }
-
-    // Mark as processing
-    updateTaskStatus(imgPath, projectPath, taskId, 'processing');
-
-    const onProgress = (msg) => {
-      try { win.webContents.send('task-progress', imgPath, msg); } catch {}
-    };
-
-    try {
-      const result = await api.analyzeAndFix({ imagePaths, projectPath, message, onProgress });
-      const finalStatus = result.status === 'success' ? 'done' : (result.status === 'no_changes' ? 'done' : 'error');
-      updateTaskStatus(imgPath, projectPath, taskId, finalStatus, result.prUrl, result.conversation, result.messages);
-      return result;
-    } catch (err) {
-      updateTaskStatus(imgPath, projectPath, taskId, 'error');
-      throw err;
-    }
-  });
-
-  // Follow-up message on existing conversation
-  ipcMain.handle('send-followup', async (event, imgPath, message) => {
-    const tasks = loadTasks();
-    const task = tasks[imgPath];
-    if (!task) throw new Error('No task found for this image');
-
-    const win = BrowserWindow.fromWebContents(event.sender);
-    const onProgress = (msg) => {
-      try { win.webContents.send('task-progress', imgPath, msg); } catch {}
-    };
-
-    updateTaskStatus(imgPath, task.projectPath, task.taskId, 'processing', task.prUrl, task.conversation, task.apiMessages);
-
-    try {
-      const result = await api.analyzeAndFix({
-        imagePaths: [imgPath],
-        projectPath: task.projectPath,
-        message,
-        onProgress,
-        priorMessages: task.apiMessages,
-      });
-      const finalStatus = result.status === 'success' ? 'done' : (result.status === 'no_changes' ? 'done' : 'error');
-      updateTaskStatus(imgPath, task.projectPath, task.taskId, finalStatus, result.prUrl || task.prUrl, result.conversation, result.messages);
-      return result;
-    } catch (err) {
-      updateTaskStatus(imgPath, task.projectPath, task.taskId, 'error', task.prUrl, task.conversation, task.apiMessages);
-      throw err;
-    }
-  });
-
-  // Get conversation for an image
-  ipcMain.handle('get-conversation', (_, imgPath) => {
-    const tasks = loadTasks();
-    const task = tasks[imgPath];
-    return task ? (task.conversation || []) : [];
+    const conversation = message ? [{ role: 'user', text: message }] : [];
+    updateTaskStatus(imagePath, projectPath, taskId, 'pending', '', conversation);
+    return { status: 'saved' };
   });
 
   const win = createWindow();

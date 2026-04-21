@@ -1,6 +1,5 @@
 const grid = document.getElementById('grid');
 const count = document.getElementById('count');
-const modelSelect = document.getElementById('model-select');
 const relaySelect = document.getElementById('relay-select');
 const relayStatusEl = document.getElementById('relay-status');
 const toast = document.getElementById('toast');
@@ -21,7 +20,6 @@ let projects = [];
 let activeProject = null; // path of selected project, or null for "all"
 const processingSet = new Set();
 const progressLogs = {}; // imgPath -> [messages]
-let expandedCard = null; // imgPath of card with conversation open
 
 // ── Toast ──
 
@@ -41,9 +39,32 @@ function showToast(msg, isError) {
 // ── URL Detection ──
 
 function makeLinksClickable(text) {
-  // Simple URL regex that matches http/https URLs
   const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return text.replace(urlRegex, '<a href="$1" class="conv-link" target="_blank" rel="noopener">$1</a>');
+  const parts = text.split(urlRegex);
+
+  const container = document.createElement('span');
+
+  parts.forEach(part => {
+    if (urlRegex.test(part)) {
+      const link = document.createElement('a');
+      link.href = part;
+      link.textContent = part;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.style.color = '#74b9ff';
+      link.style.textDecoration = 'underline';
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.xmuggle.openExternal(part);
+      });
+      container.appendChild(link);
+    } else {
+      container.appendChild(document.createTextNode(part));
+    }
+  });
+
+  return container;
 }
 
 // ── Projects ──
@@ -152,38 +173,6 @@ addNoteBtn.addEventListener('click', () => {
   });
 });
 
-// ── Helper function to make links clickable ──
-
-function makeLinksClickable(text) {
-  // Regular expression to match URLs
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const parts = text.split(urlRegex);
-  
-  const container = document.createElement('span');
-  
-  parts.forEach(part => {
-    if (urlRegex.test(part)) {
-      const link = document.createElement('a');
-      link.href = part;
-      link.textContent = part;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.style.color = '#74b9ff';
-      link.style.textDecoration = 'underline';
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        window.xmuggle.openExternal(part);
-      });
-      container.appendChild(link);
-    } else {
-      container.appendChild(document.createTextNode(part));
-    }
-  });
-  
-  return container;
-}
-
 // ── Images ──
 
 function render(images) {
@@ -203,14 +192,11 @@ function render(images) {
 
   for (const img of filtered) {
     const isProcessing = processingSet.has(img.path);
-    const isExpanded = expandedCard === img.path;
-    const hasConversation = img.conversation && img.conversation.length > 0;
     const isText = img.type === 'text';
     const card = document.createElement('div');
     card.className = 'card'
       + (isText ? ' card-text' : '')
-      + (isProcessing ? ' card-processing' : '')
-      + (isExpanded ? ' card-expanded' : '');
+      + (isProcessing ? ' card-processing' : '');
 
     if (isText) {
       const textEl = document.createElement('div');
@@ -253,77 +239,12 @@ function render(images) {
       requestAnimationFrame(() => { logEl.scrollTop = logEl.scrollHeight; });
     }
 
-    // Conversation panel (when expanded or has history)
-    if (isExpanded && hasConversation) {
-      const convEl = document.createElement('div');
-      convEl.className = 'conversation';
-      convEl.id = `conv-${CSS.escape(img.path)}`;
-
-      for (const msg of img.conversation) {
-        const msgEl = document.createElement('div');
-        msgEl.className = `conv-msg conv-${msg.role}`;
-
-        // Use makeLinksClickable for message content
-        const contentEl = makeLinksClickable(msg.text);
-        msgEl.appendChild(contentEl);
-        
-        convEl.appendChild(msgEl);
-      }
-
-      card.appendChild(convEl);
-      requestAnimationFrame(() => { convEl.scrollTop = convEl.scrollHeight; });
-
-      // Follow-up input
-      if (!isProcessing) {
-        const inputRow = document.createElement('div');
-        inputRow.className = 'conv-input-row';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'conv-input';
-        input.placeholder = 'Follow up\u2026';
-        input.addEventListener('click', (e) => e.stopPropagation());
-        const sendBtn = document.createElement('button');
-        sendBtn.className = 'conv-send-btn';
-        sendBtn.textContent = '\u25B6';
-        sendBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const text = input.value.trim();
-          if (!text) return;
-          input.value = '';
-          sendFollowup(img, text);
-        });
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
-            e.stopPropagation();
-            sendBtn.click();
-          }
-        });
-        inputRow.appendChild(input);
-        inputRow.appendChild(sendBtn);
-        card.appendChild(inputRow);
-      }
-    }
-
-    // Chat indicator / expand toggle for cards with conversation
-    if (hasConversation && !isExpanded) {
-      const chatBtn = document.createElement('button');
-      chatBtn.className = 'chat-btn';
-      chatBtn.textContent = `\u{1F4AC} ${img.conversation.length}`;
-      chatBtn.title = 'View conversation';
-      chatBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        expandedCard = img.path;
-        refresh();
-      });
-      card.appendChild(chatBtn);
-    }
-
     // Send button
     if (!isProcessing && status !== 'done') {
       const sendBtn = document.createElement('button');
       sendBtn.className = 'send-btn';
       sendBtn.textContent = '\u25B6';
-      sendBtn.title = 'Send to Claude';
+      sendBtn.title = 'Send';
       sendBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         promptAndSend(img);
@@ -349,14 +270,6 @@ function render(images) {
     name.title = img.name;
     card.appendChild(name);
 
-    // Click card to toggle conversation
-    if (hasConversation) {
-      card.addEventListener('click', () => {
-        expandedCard = expandedCard === img.path ? null : img.path;
-        refresh();
-      });
-    }
-
     grid.appendChild(card);
   }
 }
@@ -376,25 +289,23 @@ function promptAndSend(img) {
     projectOptions = '<option value="">No projects \u2014 add one first</option>';
   }
 
+  const relayHost = relaySelect.value;
+  const sendLabel = (relayHost && relayHost !== '_scan') ? 'Send' : 'Save';
+
   const modal = document.createElement('div');
   modal.id = 'context-modal';
   modal.className = 'modal-overlay';
   modal.innerHTML = `
     <div class="modal">
-      <div class="modal-title">Send to Claude</div>
+      <div class="modal-title">Send</div>
       <div class="modal-subtitle">${img.name}</div>
       <label class="modal-label">Project</label>
       <select id="project-select">${projectOptions}</select>
       <label class="modal-label">Context</label>
       <textarea id="context-input" placeholder="What's wrong? What should be fixed?" rows="3"></textarea>
-      <label class="modal-checkbox-row">
-        <input type="checkbox" id="analyze-checkbox" checked>
-        <span>Analyze with AI</span>
-      </label>
       <div class="modal-actions">
         <button id="modal-cancel" class="link-btn">Cancel</button>
-        <button id="modal-relay" class="link-btn" style="display:none;">Relay</button>
-        <button id="modal-send" class="modal-send-btn" ${projects.length === 0 ? 'disabled' : ''}>Send</button>
+        <button id="modal-send" class="modal-send-btn" ${projects.length === 0 ? 'disabled' : ''}>${sendLabel}</button>
       </div>
     </div>
   `;
@@ -402,34 +313,22 @@ function promptAndSend(img) {
 
   const contextInput = document.getElementById('context-input');
   const projectSelect = document.getElementById('project-select');
-  const analyzeCheckbox = document.getElementById('analyze-checkbox');
   projectSelect.focus();
 
   document.getElementById('modal-cancel').addEventListener('click', () => modal.remove());
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
-  // Show relay button if relay host is configured
-  const relayHost = relaySelect.value;
-  const relayBtn = document.getElementById('modal-relay');
-  if (relayHost && relayHost !== '_scan' && relayHost !== '') {
-    relayBtn.style.display = '';
-    relayBtn.textContent = 'Relay to ' + relayHost;
-    relayBtn.addEventListener('click', () => {
-      const projectPath = projectSelect.value;
-      if (!projectPath) return;
-      const message = contextInput.value.trim();
-      modal.remove();
-      relayImage(img, projectPath, message);
-    });
-  }
-
   const doSend = () => {
     const projectPath = projectSelect.value;
     if (!projectPath) return;
     const message = contextInput.value.trim();
-    const analyze = analyzeCheckbox.checked;
     modal.remove();
-    sendImage(img, projectPath, message, analyze);
+
+    if (relayHost && relayHost !== '_scan' && relayHost !== '') {
+      relayImage(img, projectPath, message);
+    } else {
+      saveItem(img, projectPath, message);
+    }
   };
 
   document.getElementById('modal-send').addEventListener('click', doSend);
@@ -438,82 +337,15 @@ function promptAndSend(img) {
   });
 }
 
-async function sendImage(img, projectPath, message, analyze = true) {
-  if (analyze) {
-    processingSet.add(img.path);
-    progressLogs[img.path] = [];
-    expandedCard = img.path;
-  }
-  const images = await window.xmuggle.getImages();
-  render(images);
-
+async function saveItem(img, projectPath, message) {
   try {
-    const result = await window.xmuggle.sendToApi([img.path], projectPath, message || '', { analyze });
-    processingSet.delete(img.path);
-
-    if (result.status === 'success') {
-      const prInfo = result.prUrl ? ` PR: ${result.prUrl}` : '';
-      showToast(`Fixed: ${result.summary}${prInfo}`, false);
-
-      // Add the success message to the conversation
-      if (result.prUrl) {
-        const successMessage = `Fixed: ${result.summary} PR: ${result.prUrl}`;
-        await addToConversation(img.path, 'assistant', successMessage);
-      }
-    } else if (result.status === 'no_changes' || result.status === 'saved') {
-      showToast(result.summary, false);
-    } else {
-      showToast(`Error: ${result.summary}`, true);
-    }
+    await window.xmuggle.saveItem(img.path, projectPath, message || '');
+    showToast('Saved', false);
   } catch (err) {
-    processingSet.delete(img.path);
     showToast(`Error: ${err.message}`, true);
   }
-
-  delete progressLogs[img.path];
   const updated = await window.xmuggle.getImages();
   render(updated);
-}
-
-async function sendFollowup(img, message) {
-  processingSet.add(img.path);
-  progressLogs[img.path] = [];
-  const images = await window.xmuggle.getImages();
-  render(images);
-
-  try {
-    const result = await window.xmuggle.sendFollowup(img.path, message);
-    processingSet.delete(img.path);
-
-    if (result.status === 'success') {
-      const prInfo = result.prUrl ? ` PR: ${result.prUrl}` : '';
-      showToast(`Fixed: ${result.summary}${prInfo}`, false);
-      
-      // Add the success message to the conversation
-      if (result.prUrl) {
-        const successMessage = `Fixed: ${result.summary} PR: ${result.prUrl}`;
-        await addToConversation(img.path, 'assistant', successMessage);
-      }
-    } else if (result.status === 'no_changes') {
-      showToast(result.summary, false);
-    } else {
-      showToast(`Error: ${result.summary}`, true);
-    }
-  } catch (err) {
-    processingSet.delete(img.path);
-    showToast(`Error: ${err.message}`, true);
-  }
-
-  delete progressLogs[img.path];
-  const updated = await window.xmuggle.getImages();
-  render(updated);
-}
-
-// Helper function to add messages to conversation (this would need to be implemented in the backend)
-async function addToConversation(imgPath, role, text) {
-  // This is a placeholder - the actual implementation would need to be added
-  // to store the message in the conversation history
-  console.log(`Adding to conversation for ${imgPath}: [${role}] ${text}`);
 }
 
 async function relayImage(img, projectPath, message) {
@@ -566,21 +398,21 @@ async function initRelay() {
       relaySelect.appendChild(opt);
     }
 
-    // If no peers found, add git sync option
+    // Git sync option
+    const gitOpt = document.createElement('option');
+    gitOpt.value = '_git';
+    gitOpt.textContent = syncRepo ? 'Git sync' : 'Git sync (configure...)';
+    relaySelect.appendChild(gitOpt);
+
     if (hosts.length === 0) {
-      const gitOpt = document.createElement('option');
-      gitOpt.value = '_git';
-      gitOpt.textContent = syncRepo ? 'Git sync' : 'Git sync (configure...)';
-      if (saved === '_git') gitOpt.selected = true;
-      relaySelect.appendChild(gitOpt);
-      relayStatusEl.textContent = 'No peers — git sync available';
+      // Default to git sync when no local peers found
+      if (!saved || saved === '_scan') {
+        relaySelect.value = '_git';
+        await window.xmuggle.setRelayHost('_git');
+      }
+      relayStatusEl.textContent = 'No peers — using git sync';
       relayStatusEl.style.color = '#f0a500';
     } else {
-      // Still add git as an option
-      const gitOpt = document.createElement('option');
-      gitOpt.value = '_git';
-      gitOpt.textContent = 'Git sync';
-      relaySelect.appendChild(gitOpt);
       relayStatusEl.textContent = hosts.length + ' peer(s)';
       relayStatusEl.style.color = '#00b894';
     }
@@ -629,27 +461,6 @@ relaySelect.addEventListener('change', async () => {
   }
 });
 
-// ── Model Selector ──
-
-async function initModelSelect() {
-  const models = await window.xmuggle.listModels();
-  const current = await window.xmuggle.getModel();
-  modelSelect.innerHTML = '';
-  for (const m of models) {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.textContent = m.label;
-    if (m.id === current) opt.selected = true;
-    modelSelect.appendChild(opt);
-  }
-}
-
-modelSelect.addEventListener('change', async () => {
-  await window.xmuggle.setModel(modelSelect.value);
-  const label = modelSelect.options[modelSelect.selectedIndex].textContent;
-  showToast(`Model: ${label}`, false);
-});
-
 // ── Init ──
 
 async function refresh() {
@@ -661,7 +472,6 @@ window.xmuggle.onImagesUpdated((images) => render(images));
 window.xmuggle.onTaskProgress((imgPath, msg) => {
   if (!progressLogs[imgPath]) progressLogs[imgPath] = [];
   progressLogs[imgPath].push(msg);
-  // Update the log element in-place if it exists, otherwise re-render
   const logEl = document.getElementById(`log-${CSS.escape(imgPath)}`);
   if (logEl) {
     const line = document.createElement('div');
@@ -673,7 +483,6 @@ window.xmuggle.onTaskProgress((imgPath, msg) => {
     refresh();
   }
 });
-initModelSelect();
 initRelay();
 loadProjects();
 refresh();
