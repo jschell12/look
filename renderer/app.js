@@ -349,12 +349,26 @@ async function saveItem(img, projectPath, message) {
 }
 
 async function relayImage(img, projectPath, message) {
+  const relayHost = relaySelect.value;
+
+  // Ensure sync repo is configured before attempting git sync
+  if (relayHost === '_git') {
+    const syncRepo = await window.xmuggle.getSyncRepo();
+    if (!syncRepo) {
+      const repo = prompt('Enter git repo URL for sync (e.g. git@github.com:user/xmuggle-sync.git):');
+      if (repo) {
+        await window.xmuggle.setSyncRepo(repo);
+      } else {
+        return;
+      }
+    }
+  }
+
   processingSet.add(img.path);
   const images = await window.xmuggle.getImages();
   render(images);
 
   try {
-    const relayHost = relaySelect.value;
     let result;
     if (relayHost === '_git') {
       result = await window.xmuggle.gitSyncPush(img.path, projectPath, message || '');
