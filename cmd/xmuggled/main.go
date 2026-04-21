@@ -265,8 +265,104 @@ func syncRepos(cfg Config) {
 			}
 		}
 
+		// Process inbox after pulling
+		processInbox(repo.Path)
+
 		for _, cmd := range repo.Commands {
 			runCommand(cmd, repo.Path)
+		}
+	}
+}
+
+// ── Inbox processing ──
+
+type inboxMeta struct {
+	Filenames []string `json:"filenames"`
+	Message   string   `json:"message"`
+	From      string   `json:"from"`
+	Timestamp string   `json:"timestamp"`
+}
+
+func processInbox(repoPath string) {
+	inboxPath := filepath.Join(repoPath, ".xmuggle", "inbox")
+	metaFile := filepath.Join(inboxPath, "meta.json")
+
+	data, err := os.ReadFile(metaFile)
+	if err != nil {
+		return // no inbox or no meta
+	}
+
+	var m inboxMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		logf("Bad inbox meta in %s: %v", repoPath, err)
+		return
+	}
+
+	if len(m.Filenames) == 0 {
+		return
+	}
+
+	// Check which images haven't been processed yet
+	donePath := filepath.Join(repoPath, ".xmuggle", "done")
+	_ = os.MkdirAll(donePath, 0755)
+
+	var pending []string
+	for _, f := range m.Filenames {
+		src := filepath.Join(inboxPath, f)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		doneMarker := filepath.Join(donePath, f+".done")
+		if _, err := os.Stat(doneMarker); err == nil {
+			continue // already processed
+		}
+		pending = append(pending, f)
+	}
+
+	if len(pending) == 0 {
+		return
+	}
+
+	logf("Processing %d image(s) in %s", len(pending), filepath.Base(repoPath))
+
+	for _, f := range pending {
+		imgPath := filepath.Join(inboxPath, f)
+		logf("  Spawning claude for %s", f)
+
+		prompt := fmt.Sprintf(
+			"Analyze the screenshot at %s and fix any bugs or UI issues you find in this repo. %s",
+			imgPath, m.Message,
+		)
+
+		cmd := exec.Command("claude", "--yes", "--print", prompt)
+		cmd.Dir = repoPath
+		cmd.Env = gitEnv()
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			logf("  Claude failed for %s: %v\n%s", f, err, string(output))
+			continue
+		}
+
+		logf("  Claude finished %s", f)
+
+		// Write result
+		resultFile := filepath.Join(donePath, f+".result")
+		_ = os.WriteFile(resultFile, output, 0644)
+
+		// Mark as done
+		doneMarker := filepath.Join(donePath, f+".done")
+		_ = os.WriteFile(doneMarker, []byte(time.Now().Format(time.RFC3339)+"\n"), 0644)
+
+		// Commit and push the changes claude made (if any)
+		if status, _ := runGit(repoPath, "status", "--porcelain"); status != "" {
+			runGit(repoPath, "add", "-A")
+			commitMsg := fmt.Sprintf("xmuggle: processed %s", f)
+			if _, err := runGit(repoPath, "commit", "-m", commitMsg); err == nil {
+				logf("  Pushing changes for %s", f)
+				if out, err := runGit(repoPath, "push"); err != nil {
+					logf("  Push failed: %s", out)
+				}
+			}
 		}
 	}
 }
@@ -475,6 +571,19 @@ func main() {
 		saveConfig(cfg)
 		fmt.Printf("Added onReceive: %s\n", cmd)
 
+	case "process-inbox":
+		// Process inbox for a specific repo or all configured repos
+		setupLog()
+		if len(os.Args) > 2 {
+			abs, _ := filepath.Abs(os.Args[2])
+			processInbox(abs)
+		} else {
+			cfg := loadConfig()
+			for _, repo := range cfg.Repos {
+				processInbox(repo.Path)
+			}
+		}
+
 	case "log":
 		n := 20
 		if len(os.Args) > 2 {
@@ -509,6 +618,7 @@ Usage:
   xmuggled add-repo <path> [cmd]   Add a repo to sync
   xmuggled add-command <cmd>       Add a global command
   xmuggled on-receive <cmd>        Add a command to run on new images
+  xmuggled process-inbox [path]    Process inbox images with Claude
 
 Config: ~/.xmuggle/daemon.json
 `)
