@@ -627,6 +627,39 @@ header h1 {
   margin-top: 4px;
 }
 
+.result-summary {
+  background: #121a30;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #00b894;
+  line-height: 1.4;
+  border-top: 1px solid #0f3460;
+  cursor: pointer;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60px;
+  overflow: hidden;
+}
+
+.result-summary:hover {
+  background: #1e1035;
+}
+
+.result-text {
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+  color: #dfe6e9;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  max-height: 50vh;
+  overflow-y: auto;
+  font-family: "SF Mono", "Menlo", "Monaco", monospace;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

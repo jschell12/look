@@ -61,35 +61,45 @@ function saveTasks(tasks) {
   fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2) + '\n');
 }
 
-function updateTaskStatus(imagePath, projectPath, taskId, status, prUrl, conversation, apiMessages) {
+function updateTaskStatus(imagePath, updates) {
   const tasks = loadTasks();
   const existing = tasks[imagePath] || {};
-  tasks[imagePath] = {
-    projectPath,
-    taskId: taskId || existing.taskId,
-    status,
-    prUrl: prUrl || existing.prUrl || '',
-    conversation: conversation || existing.conversation || [],
-    apiMessages: apiMessages || existing.apiMessages || [],
-  };
+  tasks[imagePath] = { ...existing, ...updates };
   saveTasks(tasks);
 }
 
-// Check project results dirs to update task statuses
+// Sync task statuses from queue repo
 function syncTaskStatuses() {
   const tasks = loadTasks();
   let changed = false;
-  for (const [imgPath, task] of Object.entries(tasks)) {
-    if (task.status === 'done' || task.status === 'error') continue;
-    if (!task.projectPath || !task.taskId) continue;
-    const resultFile = path.join(task.projectPath, '.xmuggle', 'results', task.taskId, 'result.json');
+
+  // Pull queue repo for latest status updates
+  if (fs.existsSync(path.join(QUEUE_REPO_DIR, '.git'))) {
+    const api = require('./api');
+    const env = api.gitEnv();
     try {
-      const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
-      task.status = result.status === 'success' ? 'done' : 'error';
-      task.prUrl = result.pr_url || '';
-      changed = true;
+      execSync('git pull --rebase', { cwd: QUEUE_REPO_DIR, stdio: 'pipe', env });
     } catch {}
   }
+
+  // Check queue repo meta.json for status changes
+  for (const [imgPath, task] of Object.entries(tasks)) {
+    if (task.status === 'done' || task.status === 'error') continue;
+    if (!task.queueTaskId) continue;
+
+    const metaFile = path.join(QUEUE_REPO_DIR, 'pending', task.queueTaskId, 'meta.json');
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+      if (meta.status && meta.status !== task.status) {
+        task.status = meta.status;
+        task.result = meta.result || '';
+        task.processedBy = meta.processedBy || '';
+        task.doneAt = meta.doneAt || '';
+        changed = true;
+      }
+    } catch {}
+  }
+
   if (changed) saveTasks(tasks);
   return tasks;
 }
@@ -122,7 +132,8 @@ function scanDir(dir, tasks, { allowText = false } = {}) {
         const status = task ? task.status : 'new';
         const projectPath = task ? task.projectPath : '';
         const conversation = task ? (task.conversation || []) : [];
-        const base = { path: full, name, mtime: stat.mtimeMs, status, projectPath, conversation };
+        const result = task ? (task.result || '') : '';
+        const base = { path: full, name, mtime: stat.mtimeMs, status, projectPath, conversation, result };
         if (isImage) {
           items.push({ ...base, type: 'image' });
         } else {
@@ -371,7 +382,16 @@ app.whenReady().then(() => {
   ipcMain.handle('get-queue-url', () => getQueueUrl());
   ipcMain.handle('set-queue-url', (_, url) => { setQueueUrl(url); return true; });
   ipcMain.handle('queue-push', (_, imagePaths, projectPath, message) => {
-    return queuePush(imagePaths, projectPath, message);
+    const result = queuePush(imagePaths, projectPath, message);
+    // Track the queue task ID locally so we can poll for status
+    const imgPath = imagePaths[0];
+    updateTaskStatus(imgPath, {
+      projectPath,
+      queueTaskId: result.id,
+      status: 'queued',
+      message: message || '',
+    });
+    return result;
   });
 
   // Create a pasted-text note item.
@@ -384,7 +404,7 @@ app.whenReady().then(() => {
   ipcMain.handle('save-item', (_, imagePath, projectPath, message) => {
     const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const conversation = message ? [{ role: 'user', text: message }] : [];
-    updateTaskStatus(imagePath, projectPath, taskId, 'pending', '', conversation);
+    updateTaskStatus(imagePath, { projectPath, taskId, status: 'pending', conversation });
     return { status: 'saved' };
   });
 
@@ -439,9 +459,10 @@ app.whenReady().then(() => {
           // Pre-assign project and message if provided
           if (project) {
             const taskId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-            updateTaskStatus(imgPath, project, taskId, 'new', '', [
-              { role: 'user', text: message || '' }
-            ]);
+            updateTaskStatus(imgPath, {
+              projectPath: project, taskId, status: 'new',
+              conversation: [{ role: 'user', text: message || '' }],
+            });
           }
 
           // Save the message as a sidecar so the UI can show it
@@ -476,6 +497,14 @@ app.whenReady().then(() => {
   relayServer.listen(SERVER_PORT, '0.0.0.0', () => {
     console.log(`xmuggle relay server listening on port ${SERVER_PORT}`);
   });
+
+  // Poll queue repo for task status updates every 10s
+  setInterval(() => {
+    try {
+      const images = getDesktopImages(); // calls syncTaskStatuses internally
+      win.webContents.send('images-updated', images);
+    } catch {}
+  }, 10_000);
 
 });
 

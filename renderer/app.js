@@ -135,6 +135,15 @@ addNoteBtn.addEventListener('click', () => {
   const existing = document.getElementById('note-modal');
   if (existing) existing.remove();
 
+  let projectOptions = '';
+  for (const p of projects) {
+    const selected = (activeProject === p.path) ? ' selected' : '';
+    projectOptions += `<option value="${p.path}"${selected}>${p.name}</option>`;
+  }
+  if (projects.length === 0) {
+    projectOptions = '<option value="">No projects \u2014 add one first</option>';
+  }
+
   const modal = document.createElement('div');
   modal.id = 'note-modal';
   modal.className = 'modal-overlay';
@@ -142,6 +151,8 @@ addNoteBtn.addEventListener('click', () => {
     <div class="modal">
       <div class="modal-title">Paste text</div>
       <div class="modal-subtitle">Saved as a text note you can send like a screenshot</div>
+      <label class="modal-label">Project</label>
+      <select id="note-project-select">${projectOptions}</select>
       <textarea id="note-text-input" placeholder="Paste error message, stack trace, log, etc\u2026" rows="10"></textarea>
       <div class="modal-actions">
         <button id="note-cancel" class="link-btn">Cancel</button>
@@ -159,9 +170,13 @@ addNoteBtn.addEventListener('click', () => {
   const save = async () => {
     const text = textInput.value.trim();
     if (!text) return;
+    const projectPath = document.getElementById('note-project-select').value;
     modal.remove();
     try {
       const note = await window.xmuggle.createNote(text);
+      if (projectPath) {
+        await window.xmuggle.saveItem(note.path, projectPath, '');
+      }
       showToast(`Saved ${note.name}`, false);
       await refresh();
     } catch (err) {
@@ -237,6 +252,30 @@ settingsBtn.addEventListener('click', async () => {
   });
 });
 
+// ── Result Modal ──
+
+function showResultModal(img) {
+  const existing = document.getElementById('result-modal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'result-modal';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:600px;max-height:80vh;overflow-y:auto;">
+      <div class="modal-title">Result</div>
+      <div class="modal-subtitle">${img.name} \u2192 ${img.projectPath ? img.projectPath.split('/').pop() : ''}</div>
+      <pre class="result-text">${img.result || 'No result'}</pre>
+      <div class="modal-actions">
+        <button id="result-close" class="modal-send-btn">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  document.getElementById('result-close').addEventListener('click', () => modal.remove());
+}
+
 // ── Images ──
 
 function render(images) {
@@ -301,6 +340,21 @@ function render(images) {
       }
       card.appendChild(logEl);
       requestAnimationFrame(() => { logEl.scrollTop = logEl.scrollHeight; });
+    }
+
+    // Result summary (when done)
+    if (status === 'done' && img.result) {
+      const resultEl = document.createElement('div');
+      resultEl.className = 'result-summary';
+      resultEl.textContent = img.result.length > 200
+        ? img.result.slice(0, 200) + '\u2026'
+        : img.result;
+      resultEl.title = 'Click to see full result';
+      resultEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        showResultModal(img);
+      });
+      card.appendChild(resultEl);
     }
 
     // Send button
