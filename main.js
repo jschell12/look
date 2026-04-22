@@ -480,6 +480,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (relayServer) relayServer.close();
-  app.quit();
+  if (relayServer) {
+    relayServer.close(() => app.quit());
+  } else {
+    app.quit();
+  }
 });

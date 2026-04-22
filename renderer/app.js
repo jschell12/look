@@ -191,7 +191,7 @@ settingsBtn.addEventListener('click', async () => {
       <div class="modal-title">Settings</div>
       <div class="settings-field">
         <label>Queue Repo URL</label>
-        <input type="text" id="settings-queue-url" value="${queueUrl || ''}" placeholder="git@github.com:user/xmuggle-queue.git">
+        <input type="text" id="settings-queue-url" placeholder="git@github.com:user/xmuggle-queue.git">
         <div class="settings-hint">Git repo for syncing screenshots between machines</div>
       </div>
       <div class="settings-field">
@@ -207,6 +207,7 @@ settingsBtn.addEventListener('click', async () => {
     </div>
   `;
   document.body.appendChild(modal);
+  document.getElementById('settings-queue-url').value = queueUrl || '';
 
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
   document.getElementById('settings-cancel').addEventListener('click', () => modal.remove());
