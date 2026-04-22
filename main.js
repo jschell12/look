@@ -181,7 +181,7 @@ function ensureQueueClone() {
     }
   } else {
     try {
-      execSync('git pull --ff-only', { cwd: QUEUE_REPO_DIR, stdio: 'pipe', env });
+      execSync('git pull --rebase', { cwd: QUEUE_REPO_DIR, stdio: 'pipe', env });
     } catch {}
   }
   return QUEUE_REPO_DIR;
