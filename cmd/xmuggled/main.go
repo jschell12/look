@@ -153,6 +153,9 @@ func runShell(command, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// Track repos currently being processed to skip pulling them
+var processingRepos = map[string]bool{}
+
 // ── Queue message schema ──
 //
 // Each task lives in pending/<id>/meta.json with these fields:
@@ -333,7 +336,8 @@ func processQueue(cfg Config) {
 			strings.Join(imgPaths, ", "), m.Message,
 		)
 
-		// Spawn claude
+		// Spawn claude (mark repo as busy so syncRepos skips it)
+		processingRepos[repoPath] = true
 		logf("  Spawning claude in %s", filepath.Base(repoPath))
 		cmd := exec.Command("claude", "--print", "--dangerously-skip-permissions", prompt)
 		cmd.Dir = repoPath
@@ -342,6 +346,7 @@ func processQueue(cfg Config) {
 		result := strings.TrimSpace(string(output))
 
 		if err != nil {
+			delete(processingRepos, repoPath)
 			logf("  Claude failed: %v\n%s", err, result)
 			m.Status = "error"
 			m.Result = fmt.Sprintf("Claude failed: %v", err)
@@ -365,6 +370,8 @@ func processQueue(cfg Config) {
 			}
 		}
 
+		delete(processingRepos, repoPath)
+
 		// Mark as done in queue
 		m.Status = "done"
 		m.Result = result
@@ -382,6 +389,9 @@ func syncRepos(cfg Config) {
 	for _, repo := range cfg.Repos {
 		if _, err := os.Stat(repo.Path); err != nil {
 			logf("Repo not found: %s", repo.Path)
+			continue
+		}
+		if processingRepos[repo.Path] {
 			continue
 		}
 		if repo.ShouldPull() {
