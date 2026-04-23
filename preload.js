@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('xmuggle', {
   setQueueUrl: (url) => ipcRenderer.invoke('set-queue-url', url),
   queuePush: (imagePaths, projectPath, message) => ipcRenderer.invoke('queue-push', imagePaths, projectPath, message),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  daemonStatus: () => ipcRenderer.invoke('daemon-status'),
+  daemonStart: () => ipcRenderer.invoke('daemon-start'),
+  daemonStop: () => ipcRenderer.invoke('daemon-stop'),
+  daemonLog: (lines) => ipcRenderer.invoke('daemon-log', lines),
   onImagesUpdated: (callback) => {
     ipcRenderer.on('images-updated', (_, images) => callback(images));
   },

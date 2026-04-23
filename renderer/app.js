@@ -8,6 +8,10 @@ const addProjectBtn = document.getElementById('add-project');
 const addNoteBtn = document.getElementById('add-note');
 const settingsBtn = document.getElementById('settings-btn');
 
+const daemonIndicator = document.getElementById('daemon-indicator');
+const daemonDot = daemonIndicator.querySelector('.daemon-dot');
+const daemonLabel = daemonIndicator.querySelector('.daemon-label');
+
 const BADGE_LABELS = {
   new: 'New',
   pending: 'Pending',
@@ -21,6 +25,34 @@ let projects = [];
 let activeProject = null; // path of selected project, or null for "all"
 const processingSet = new Set();
 const progressLogs = {}; // imgPath -> [messages]
+
+// ── Daemon ──
+
+let daemonRunning = false;
+
+async function updateDaemonStatus() {
+  try {
+    const status = await window.xmuggle.daemonStatus();
+    daemonRunning = status.running;
+    daemonDot.className = 'daemon-dot ' + (status.running ? 'daemon-on' : 'daemon-off');
+    daemonLabel.textContent = status.running ? `Daemon (pid ${status.pid})` : 'Daemon (stopped)';
+    daemonIndicator.title = status.running ? `Daemon running (pid ${status.pid})` : 'Daemon stopped — click to start';
+  } catch {
+    daemonDot.className = 'daemon-dot daemon-off';
+    daemonLabel.textContent = 'Daemon (unknown)';
+  }
+}
+
+daemonIndicator.addEventListener('click', async () => {
+  if (daemonRunning) {
+    const result = await window.xmuggle.daemonStop();
+    showToast(result.ok ? 'Daemon stopped' : `Stop failed: ${result.message}`, !result.ok);
+  } else {
+    const result = await window.xmuggle.daemonStart();
+    showToast(result.ok ? 'Daemon started' : `Start failed: ${result.message}`, !result.ok);
+  }
+  await updateDaemonStatus();
+});
 
 // ── Toast ──
 
@@ -256,6 +288,7 @@ settingsBtn.addEventListener('click', async () => {
 
   const queueUrl = await window.xmuggle.getQueueUrl();
   const hasToken = await window.xmuggle.hasGhToken();
+  const daemon = await window.xmuggle.daemonStatus();
 
   const modal = document.createElement('div');
   modal.id = 'settings-modal';
@@ -263,6 +296,16 @@ settingsBtn.addEventListener('click', async () => {
   modal.innerHTML = `
     <div class="modal">
       <div class="modal-title">Settings</div>
+      <div class="settings-field">
+        <label>Daemon</label>
+        <div class="daemon-control">
+          <span class="daemon-dot ${daemon.running ? 'daemon-on' : 'daemon-off'}"></span>
+          <span id="settings-daemon-status">${daemon.running ? 'Running (pid ' + daemon.pid + ')' : 'Stopped'}</span>
+          <button id="settings-daemon-toggle" class="daemon-toggle-btn ${daemon.running ? 'daemon-stop-btn' : 'daemon-start-btn'}">${daemon.running ? 'Stop' : 'Start'}</button>
+          <button id="settings-daemon-log" class="link-btn">View Log</button>
+        </div>
+        <div class="settings-hint">Background daemon syncs repos and processes queue tasks</div>
+      </div>
       <div class="settings-field">
         <label>Queue Repo URL</label>
         <input type="text" id="settings-queue-url" placeholder="git@github.com:user/xmuggle-queue.git">
@@ -285,6 +328,55 @@ settingsBtn.addEventListener('click', async () => {
 
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
   document.getElementById('settings-cancel').addEventListener('click', () => modal.remove());
+
+  // Daemon toggle
+  document.getElementById('settings-daemon-toggle').addEventListener('click', async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    btn.textContent = '...';
+    const result = daemon.running
+      ? await window.xmuggle.daemonStop()
+      : await window.xmuggle.daemonStart();
+    const updated = await window.xmuggle.daemonStatus();
+    const dot = modal.querySelector('.daemon-dot');
+    dot.className = 'daemon-dot ' + (updated.running ? 'daemon-on' : 'daemon-off');
+    document.getElementById('settings-daemon-status').textContent =
+      updated.running ? 'Running (pid ' + updated.pid + ')' : 'Stopped';
+    btn.textContent = updated.running ? 'Stop' : 'Start';
+    btn.className = 'daemon-toggle-btn ' + (updated.running ? 'daemon-stop-btn' : 'daemon-start-btn');
+    btn.disabled = false;
+    daemon.running = updated.running;
+    daemon.pid = updated.pid;
+    await updateDaemonStatus();
+    showToast(result.ok ? result.message : `Error: ${result.message}`, !result.ok);
+  });
+
+  // Daemon log viewer
+  document.getElementById('settings-daemon-log').addEventListener('click', async () => {
+    const existing = document.getElementById('daemon-log-modal');
+    if (existing) { existing.remove(); return; }
+    const logText = await window.xmuggle.daemonLog(80);
+    const logModal = document.createElement('div');
+    logModal.id = 'daemon-log-modal';
+    logModal.className = 'modal-overlay';
+    logModal.innerHTML = `
+      <div class="modal" style="max-width:700px;max-height:80vh;overflow-y:auto;">
+        <div class="modal-title">Daemon Log</div>
+        <pre class="daemon-log-content">${logText || 'No log output'}</pre>
+        <div class="modal-actions">
+          <button id="daemon-log-refresh" class="link-btn">Refresh</button>
+          <button id="daemon-log-close" class="modal-send-btn">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(logModal);
+    logModal.addEventListener('click', (e) => { if (e.target === logModal) logModal.remove(); });
+    document.getElementById('daemon-log-close').addEventListener('click', () => logModal.remove());
+    document.getElementById('daemon-log-refresh').addEventListener('click', async () => {
+      const fresh = await window.xmuggle.daemonLog(80);
+      logModal.querySelector('.daemon-log-content').textContent = fresh || 'No log output';
+    });
+  });
 
   const resetBtn = document.getElementById('settings-reset-token');
   if (resetBtn) {
@@ -665,3 +757,5 @@ window.xmuggle.onTaskProgress((imgPath, msg) => {
 initRelay();
 loadProjects();
 refresh();
+updateDaemonStatus();
+setInterval(updateDaemonStatus, 10_000);

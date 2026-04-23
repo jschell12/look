@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const http = require('http');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -13,6 +13,9 @@ const INBOX_DIR = path.join(XMUGGLE_DIR, 'inbox');
 const NOTES_DIR = path.join(XMUGGLE_DIR, 'notes');
 const QUEUE_REPO_DIR = path.join(XMUGGLE_DIR, 'queue-repo');
 const QUEUE_CONF_FILE = path.join(XMUGGLE_DIR, 'queue-url');
+const PID_FILE = path.join(XMUGGLE_DIR, 'daemon.pid');
+const DAEMON_LOG = path.join(XMUGGLE_DIR, 'daemon.log');
+const DAEMON_BIN = path.join(os.homedir(), '.local', 'bin', 'xmuggled');
 const SERVER_PORT = 24816;
 let relayServer = null;
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
@@ -263,6 +266,73 @@ function queuePush(imagePaths, projectPath, message) {
   return { status: 'queued', id, project };
 }
 
+// ── Daemon control ──
+
+function getDaemonStatus() {
+  try {
+    const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
+    if (!pid) return { running: false };
+    // Check if process is alive
+    try {
+      process.kill(Number(pid), 0);
+      return { running: true, pid: Number(pid) };
+    } catch {
+      return { running: false };
+    }
+  } catch {
+    return { running: false };
+  }
+}
+
+function daemonStart() {
+  const status = getDaemonStatus();
+  if (status.running) return { ok: true, message: 'Already running', pid: status.pid };
+
+  if (!fs.existsSync(DAEMON_BIN)) {
+    return { ok: false, message: 'Daemon binary not found. Run "make install" first.' };
+  }
+
+  try {
+    // Clean stale PID file
+    try { fs.unlinkSync(PID_FILE); } catch {}
+    execSync(`"${DAEMON_BIN}" start`, { stdio: 'pipe', timeout: 5000 });
+    // Give it a moment to write PID
+    const after = getDaemonStatus();
+    return { ok: true, message: 'Started', pid: after.pid || null };
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+}
+
+function daemonStop() {
+  const status = getDaemonStatus();
+  if (!status.running) return { ok: true, message: 'Not running' };
+
+  try {
+    execSync(`"${DAEMON_BIN}" stop`, { stdio: 'pipe', timeout: 5000 });
+    return { ok: true, message: 'Stopped' };
+  } catch (e) {
+    // Fallback: kill directly
+    try {
+      process.kill(status.pid, 'SIGTERM');
+      try { fs.unlinkSync(PID_FILE); } catch {}
+      return { ok: true, message: 'Stopped (fallback)' };
+    } catch {
+      return { ok: false, message: e.message };
+    }
+  }
+}
+
+function getDaemonLog(lines) {
+  try {
+    const content = fs.readFileSync(DAEMON_LOG, 'utf8');
+    const all = content.split('\n');
+    return all.slice(-lines).join('\n');
+  } catch {
+    return '';
+  }
+}
+
 // ── Window ──
 
 function createWindow() {
@@ -338,6 +408,12 @@ app.whenReady().then(() => {
   ipcMain.handle('reset-gh-token', () => { api.resetGhToken(); return true; });
 
   ipcMain.handle('open-external', (_, url) => shell.openExternal(url));
+
+  // Daemon control
+  ipcMain.handle('daemon-status', () => getDaemonStatus());
+  ipcMain.handle('daemon-start', () => daemonStart());
+  ipcMain.handle('daemon-stop', () => daemonStop());
+  ipcMain.handle('daemon-log', (_, lines) => getDaemonLog(lines || 50));
 
   // Relay
   ipcMain.handle('get-relay-host', () => api.getRelayHost());
