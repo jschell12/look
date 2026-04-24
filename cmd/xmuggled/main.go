@@ -167,8 +167,14 @@ func syncQueue() bool {
 	if _, err := os.Stat(gitDir); err != nil {
 		return false
 	}
-	if out, err := runGit(queueDir, "pull", "--rebase", "origin", "main"); err != nil {
-		logf("Queue pull failed: %s", out)
+	if out, err := runGit(queueDir, "fetch", "origin", "main"); err != nil {
+		logf("Queue fetch failed: %s", out)
+		return false
+	}
+	// Reset to FETCH_HEAD — safe because the queue repo has no local work to preserve
+	// between poll cycles. Local commits from queueCommitPush are pushed immediately.
+	if out, err := runGit(queueDir, "reset", "--hard", "FETCH_HEAD"); err != nil {
+		logf("Queue reset failed: %s", out)
 		return false
 	}
 	return true
@@ -177,7 +183,9 @@ func syncQueue() bool {
 func queueCommitPush(message string) {
 	runGit(queueDir, "add", "-A")
 	if _, err := runGit(queueDir, "commit", "-m", message); err == nil {
-		runGit(queueDir, "pull", "--rebase", "origin", "main")
+		// Fetch + rebase onto FETCH_HEAD to preserve our commit on top
+		runGit(queueDir, "fetch", "origin", "main")
+		runGit(queueDir, "rebase", "FETCH_HEAD")
 		if out, err := runGit(queueDir, "push", "origin", "main"); err != nil {
 			logf("  Queue push failed: %s", out)
 		}
