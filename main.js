@@ -103,19 +103,44 @@ function syncTaskStatuses() {
   }
 
   // Check queue repo meta.json for status changes
+  const pendingDir = path.join(QUEUE_REPO_DIR, 'pending');
   for (const [imgPath, task] of Object.entries(tasks)) {
     if (task.status === 'done' || task.status === 'error') continue;
-    if (!task.queueTaskId) continue;
 
-    const metaFile = path.join(QUEUE_REPO_DIR, 'pending', task.queueTaskId, 'meta.json');
+    // Match by queueTaskId if available
+    if (task.queueTaskId) {
+      const metaFile = path.join(pendingDir, task.queueTaskId, 'meta.json');
+      try {
+        const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+        if (meta.status && meta.status !== task.status) {
+          task.status = meta.status;
+          task.result = meta.result || '';
+          task.processedBy = meta.processedBy || '';
+          task.doneAt = meta.doneAt || '';
+          changed = true;
+        }
+      } catch {}
+      continue;
+    }
+
+    // Fallback: scan queue for tasks with matching filename
+    const imgName = path.basename(imgPath);
     try {
-      const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-      if (meta.status && meta.status !== task.status) {
-        task.status = meta.status;
-        task.result = meta.result || '';
-        task.processedBy = meta.processedBy || '';
-        task.doneAt = meta.doneAt || '';
-        changed = true;
+      const dirs = fs.readdirSync(pendingDir);
+      for (const dir of dirs) {
+        const metaFile = path.join(pendingDir, dir, 'meta.json');
+        try {
+          const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+          if (meta.filenames && meta.filenames.includes(imgName) && meta.status && meta.status !== task.status) {
+            task.queueTaskId = dir;
+            task.status = meta.status;
+            task.result = meta.result || '';
+            task.processedBy = meta.processedBy || '';
+            task.doneAt = meta.doneAt || '';
+            changed = true;
+            break;
+          }
+        } catch {}
       }
     } catch {}
   }
