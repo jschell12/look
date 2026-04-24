@@ -309,13 +309,20 @@ func processQueue(cfg Config) {
 		}
 		prompt := strings.Join(promptParts, "\n\n")
 
-		// Spawn claude in the temp clone
+		// Spawn claude in the temp clone, stream output to a log file
+		claudeLog := filepath.Join(xmuggleDir, "claude-"+taskID+".log")
 		logf("  Spawning claude on branch %s", branch)
+		logf("  Tail live: tail -f %s", claudeLog)
 		cmd := exec.Command("claude", "--print", "--dangerously-skip-permissions", prompt)
 		cmd.Dir = cloneDir
 		cmd.Env = gitEnv()
-		output, err := cmd.CombinedOutput()
-		result := strings.TrimSpace(string(output))
+		claudeLogFile, _ := os.Create(claudeLog)
+		cmd.Stdout = claudeLogFile
+		cmd.Stderr = claudeLogFile
+		err = cmd.Run()
+		claudeLogFile.Close()
+		outputBytes, _ := os.ReadFile(claudeLog)
+		result := strings.TrimSpace(string(outputBytes))
 
 		if err != nil {
 			logf("  Claude failed: %v\n%s", err, result)
