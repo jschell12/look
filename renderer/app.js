@@ -590,14 +590,7 @@ function promptAndSend(img) {
     const message = contextInput.value.trim();
     modal.remove();
 
-    const relayHost = relaySelect.value;
-    if (relayHost === '_git') {
-      queuePush(img, projectPath, message);
-    } else if (relayHost && relayHost !== '_scan' && relayHost !== '') {
-      relayImage(img, projectPath, message);
-    } else {
-      saveItem(img, projectPath, message);
-    }
+    queuePush(img, projectPath, message);
   };
 
   document.getElementById('modal-send').addEventListener('click', doSend);
