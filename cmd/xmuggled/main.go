@@ -313,7 +313,7 @@ func processQueue(cfg Config) {
 		claudeLog := filepath.Join(xmuggleDir, "claude-"+taskID+".log")
 		logf("  Spawning claude on branch %s", branch)
 		logf("  Tail live: tail -f %s", claudeLog)
-		cmd := exec.Command("claude", "--print", "--dangerously-skip-permissions", prompt)
+		cmd := exec.Command("claude", "--print", "--output-format", "stream-json", "--dangerously-skip-permissions", prompt)
 		cmd.Dir = cloneDir
 		cmd.Env = gitEnv()
 		claudeLogFile, _ := os.Create(claudeLog)
