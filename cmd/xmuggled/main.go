@@ -265,31 +265,49 @@ func processQueue(cfg Config) {
 		branch := fmt.Sprintf("xmuggle-fix-%s", taskID)
 		runGit(cloneDir, "checkout", "-b", branch)
 
-		// Collect image paths
+		// Collect attachments — images and text files
 		var imgPaths []string
+		var textContent []string
 		for _, f := range m.Filenames {
 			p := filepath.Join(taskDir, f)
-			if _, err := os.Stat(p); err == nil {
+			if _, err := os.Stat(p); err != nil {
+				continue
+			}
+			ext := strings.ToLower(filepath.Ext(f))
+			if ext == ".txt" || ext == ".md" {
+				data, err := os.ReadFile(p)
+				if err == nil {
+					textContent = append(textContent, string(data))
+				}
+			} else {
 				imgPaths = append(imgPaths, p)
 			}
 		}
 
-		if len(imgPaths) == 0 {
-			logf("  No images found in task %s", taskID)
+		if len(imgPaths) == 0 && len(textContent) == 0 && m.Message == "" {
+			logf("  No content in task %s", taskID)
 			os.RemoveAll(cloneDir)
 			m.Status = "error"
-			m.Result = "No images found in task"
+			m.Result = "No content found in task"
 			m.DoneAt = time.Now().Format(time.RFC3339)
 			writeTaskMeta(metaFile, m)
-			queueCommitPush(fmt.Sprintf("error: %s — no images", taskID))
+			queueCommitPush(fmt.Sprintf("error: %s — no content", taskID))
 			continue
 		}
 
-		// Build prompt
-		prompt := fmt.Sprintf(
-			"Analyze the screenshot(s) at %s and fix any bugs or UI issues you find in this repo. %s",
-			strings.Join(imgPaths, ", "), m.Message,
-		)
+		// Build prompt based on what we have
+		var promptParts []string
+		if len(imgPaths) > 0 {
+			promptParts = append(promptParts,
+				fmt.Sprintf("Analyze the screenshot(s) at %s and fix any bugs or UI issues you find in this repo.", strings.Join(imgPaths, ", ")))
+		}
+		if len(textContent) > 0 {
+			promptParts = append(promptParts, "Here is additional context:\n\n"+strings.Join(textContent, "\n\n"))
+		}
+		if m.Message != "" {
+			promptParts = append(promptParts, m.Message)
+		}
+		prompt := strings.Join(promptParts, "\n\n")
 
 		// Spawn claude in the temp clone
 		logf("  Spawning claude on branch %s", branch)
