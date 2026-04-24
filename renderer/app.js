@@ -262,13 +262,13 @@ addNoteBtn.addEventListener('click', () => {
     const text = textInput.value.trim();
     if (!text) return;
     const projectPath = document.getElementById('note-project-select').value;
+    if (!projectPath) { showToast('Select a project first', true); return; }
     modal.remove();
     try {
       const note = await window.xmuggle.createNote(text);
-      if (projectPath) {
-        await window.xmuggle.saveItem(note.path, projectPath, '');
-      }
-      showToast(`Saved ${note.name}`, false);
+      // Push to queue just like screenshots
+      const result = await window.xmuggle.queuePush([note.path], projectPath, '');
+      showToast('Queued ' + note.name, false);
       await refresh();
     } catch (err) {
       showToast(`Error: ${err.message}`, true);
