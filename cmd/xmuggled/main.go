@@ -587,6 +587,60 @@ func findRepoConfig(cfg Config, project string) *RepoConfig {
 	return nil
 }
 
+// killRepoProcesses finds and kills processes whose working directory matches
+// repoPath. This catches processes not tracked by the daemon (e.g., manually
+// started make run, electron, npm start, etc.) so the app can be properly
+// restarted by post-commands.
+func killRepoProcesses(repoPath, taskID string) {
+	out, err := exec.Command("lsof", "-d", "cwd", "-Fpn").Output()
+	if err != nil {
+		return
+	}
+
+	myPid := os.Getpid()
+	myPgid, _ := syscall.Getpgid(myPid)
+	lines := strings.Split(string(out), "\n")
+
+	var currentPid int
+	killedGroups := make(map[int]bool)
+
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			currentPid, _ = strconv.Atoi(line[1:])
+		case 'n':
+			cwdPath := line[1:]
+			if cwdPath != repoPath || currentPid <= 0 || currentPid == myPid {
+				continue
+			}
+			pgid, err := syscall.Getpgid(currentPid)
+			if err != nil {
+				continue
+			}
+			// Don't kill our own process group.
+			if pgid == myPgid {
+				continue
+			}
+			if killedGroups[pgid] {
+				continue
+			}
+			killedGroups[pgid] = true
+			if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
+				logf("  [%s] Post-task: kill repo pgid %d (pid %d): %v", taskID, pgid, currentPid, err)
+			} else {
+				logf("  [%s] Post-task: killed repo process group %d (pid %d, cwd=%s)", taskID, pgid, currentPid, repoPath)
+			}
+		}
+	}
+
+	if len(killedGroups) > 0 {
+		time.Sleep(2 * time.Second)
+	}
+}
+
 // killPostCmdProcs kills any previously running post-command processes for the
 // given repo path by sending SIGTERM to their process groups.
 func killPostCmdProcs(repoPath, taskID string) {
@@ -623,6 +677,9 @@ func runPostTaskCommands(cfg Config, project, taskID string) {
 		logf("  [%s] Post-task: local path %s not found, skipping", taskID, rc.Path)
 		return
 	}
+
+	// Kill any running processes in the repo directory (manually started apps, etc.)
+	killRepoProcesses(rc.Path, taskID)
 
 	// Kill any still-running post-commands for this repo before restarting.
 	killPostCmdProcs(rc.Path, taskID)
