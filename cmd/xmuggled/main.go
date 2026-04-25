@@ -36,6 +36,13 @@ var (
 	activeTasksMu sync.Mutex
 )
 
+// postCmdProcs tracks running post-command processes by repo path so they can
+// be killed before re-running.
+var postCmdProcs = struct {
+	sync.Mutex
+	m map[string][]*os.Process // key = repo path
+}{m: make(map[string][]*os.Process)}
+
 type RepoConfig struct {
 	Path         string   `json:"path"`
 	PostCommands []string `json:"postCommands,omitempty"`
@@ -580,8 +587,31 @@ func findRepoConfig(cfg Config, project string) *RepoConfig {
 	return nil
 }
 
+// killPostCmdProcs kills any previously running post-command processes for the
+// given repo path by sending SIGTERM to their process groups.
+func killPostCmdProcs(repoPath, taskID string) {
+	postCmdProcs.Lock()
+	procs := postCmdProcs.m[repoPath]
+	postCmdProcs.m[repoPath] = nil
+	postCmdProcs.Unlock()
+
+	for _, p := range procs {
+		// Kill the entire process group (negative PID).
+		if err := syscall.Kill(-p.Pid, syscall.SIGTERM); err != nil {
+			// Process may have already exited — that's fine.
+			logf("  [%s] Post-task: kill pgid %d: %v (may have already exited)", taskID, p.Pid, err)
+		} else {
+			logf("  [%s] Post-task: killed previous post-command process group %d", taskID, p.Pid)
+		}
+		// Reap the process so it doesn't become a zombie.
+		p.Wait()
+	}
+}
+
 // runPostTaskCommands pulls the latest changes into the local repo and runs
 // any configured post-commands (e.g. make build, make install).
+// Long-running commands are started in background process groups so they can
+// be killed and restarted on the next task completion.
 func runPostTaskCommands(cfg Config, project, taskID string) {
 	rc := findRepoConfig(cfg, project)
 	if rc == nil || rc.Path == "" {
@@ -594,6 +624,9 @@ func runPostTaskCommands(cfg Config, project, taskID string) {
 		return
 	}
 
+	// Kill any still-running post-commands for this repo before restarting.
+	killPostCmdProcs(rc.Path, taskID)
+
 	// Pull latest changes
 	logf("  [%s] Post-task: git pull --rebase in %s", taskID, rc.Path)
 	if out, err := runGit(rc.Path, "pull", "--rebase"); err != nil {
@@ -601,18 +634,34 @@ func runPostTaskCommands(cfg Config, project, taskID string) {
 	}
 
 	// Run post-commands
+	var newProcs []*os.Process
 	for _, cmdStr := range rc.PostCommands {
 		logf("  [%s] Post-task: running %q in %s", taskID, cmdStr, rc.Path)
 		cmd := exec.Command("bash", "-c", cmdStr)
 		cmd.Dir = rc.Path
 		cmd.Env = os.Environ()
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			logf("  [%s] Post-task: %q failed: %s", taskID, cmdStr, strings.TrimSpace(string(out)))
-		} else {
-			logf("  [%s] Post-task: %q succeeded", taskID, cmdStr)
+		// Start in its own process group so we can kill the whole tree later.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			logf("  [%s] Post-task: %q failed to start: %v", taskID, cmdStr, err)
+			continue
 		}
+		logf("  [%s] Post-task: %q started (pid %d)", taskID, cmdStr, cmd.Process.Pid)
+		newProcs = append(newProcs, cmd.Process)
+
+		// Wait in the background so we log completion / reap zombies.
+		go func(cmdStr string, c *exec.Cmd) {
+			if err := c.Wait(); err != nil {
+				logf("  [%s] Post-task: %q exited: %v", taskID, cmdStr, err)
+			} else {
+				logf("  [%s] Post-task: %q succeeded", taskID, cmdStr)
+			}
+		}(cmdStr, cmd)
 	}
+
+	postCmdProcs.Lock()
+	postCmdProcs.m[rc.Path] = newProcs
+	postCmdProcs.Unlock()
 }
 
 func markDone(m *taskMeta, metaFile, taskID, result string) {
