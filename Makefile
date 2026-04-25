@@ -32,6 +32,9 @@ daemon-restart:
 daemon-status:
 	$(INSTALL_DIR)/xmuggled status
 
+log:
+	bash scripts/tail-all.sh
+
 daemon-log:
 	tail -f $(HOME)/.xmuggle/daemon.log
 
