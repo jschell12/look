@@ -242,6 +242,9 @@ func ensureQueueClone(cfg Config) bool {
 	return syncQueue()
 }
 
+// Track tasks we've already run post-commands for
+var postCmdDone = make(map[string]bool)
+
 func processQueue(cfg Config) {
 	if !ensureQueueClone(cfg) {
 		return
@@ -255,6 +258,29 @@ func processQueue(cfg Config) {
 
 	host := hostname()
 
+	// First pass: run post-commands for our tasks that completed
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		taskID := entry.Name()
+		if postCmdDone[taskID] {
+			continue
+		}
+		metaFile := filepath.Join(pendingDir, taskID, "meta.json")
+		m, err := readTaskMeta(metaFile)
+		if err != nil {
+			continue
+		}
+		// Only run post-commands for tasks WE sent that are now done
+		if m.From == host && m.Status == "done" {
+			postCmdDone[taskID] = true
+			logf("  [%s] Task completed by %s, running post-commands", taskID, m.ProcessedBy)
+			runPostTaskCommands(cfg, m.Project, taskID)
+		}
+	}
+
+	// Second pass: dispatch pending tasks from other hosts
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -538,9 +564,6 @@ func runWorker(cfg Config, m *taskMeta, taskID, taskDir string) {
 	} else {
 		logf("  [%s] Merged to main via agent-merge", taskID)
 	}
-
-	// Pull changes and run post-commands in the local repo
-	runPostTaskCommands(cfg, m.Project, taskID)
 
 	markDone(m, metaFile, taskID, result)
 }
