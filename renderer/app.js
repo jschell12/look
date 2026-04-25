@@ -443,6 +443,47 @@ settingsBtn.addEventListener('click', async () => {
   });
 });
 
+// ── Claude Log Filter ──
+
+function filterClaudeLog(raw) {
+  if (!raw) return raw;
+  const lines = raw.split('\n');
+  const out = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let msg;
+    try { msg = JSON.parse(trimmed); } catch { out.push(trimmed); continue; }
+    const t = msg.type;
+    if (t === 'assistant') {
+      const content = (msg.message && msg.message.content) || [];
+      for (const block of content) {
+        if (block.type === 'text') {
+          out.push(block.text);
+        } else if (block.type === 'tool_use') {
+          const name = block.name || '';
+          const inp = block.input || {};
+          if (name === 'Bash') out.push(`> ${inp.command || ''}`);
+          else if (name === 'Edit') out.push(`[edit] ${inp.file_path || ''}`);
+          else if (name === 'Write') out.push(`[write] ${inp.file_path || ''}`);
+          else if (name === 'Read') out.push(`[read] ${inp.file_path || ''}`);
+          else if (name === 'Glob') out.push(`[glob] ${inp.pattern || ''}`);
+          else if (name === 'Grep') out.push(`[grep] ${inp.pattern || ''}`);
+          else if (name === 'Agent') out.push(`[agent] ${inp.description || ''}`);
+          else out.push(`[${name}]`);
+        }
+      }
+    } else if (t === 'system') {
+      const sub = msg.subtype || '';
+      if (sub === 'task_progress') {
+        const desc = msg.description || '';
+        if (desc) out.push(`... ${desc}`);
+      }
+    }
+  }
+  return out.length > 0 ? out.join('\n') : raw;
+}
+
 // ── Result Modal ──
 
 function showResultModal(img) {
@@ -456,7 +497,7 @@ function showResultModal(img) {
     <div class="modal" style="max-width:600px;max-height:80vh;overflow-y:auto;">
       <div class="modal-title">Result</div>
       <div class="modal-subtitle">${img.name} \u2192 ${img.projectPath ? img.projectPath.split('/').pop() : ''}</div>
-      <pre class="result-text">${img.result || 'No result'}</pre>
+      <pre class="result-text">${filterClaudeLog(img.result) || 'No result'}</pre>
       <div class="modal-actions">
         <button id="result-close" class="modal-send-btn">Close</button>
       </div>
@@ -537,9 +578,10 @@ function render(images) {
     if (status === 'done' && img.result) {
       const resultEl = document.createElement('div');
       resultEl.className = 'result-summary';
-      resultEl.textContent = img.result.length > 200
-        ? img.result.slice(0, 200) + '\u2026'
-        : img.result;
+      const filtered = filterClaudeLog(img.result);
+      resultEl.textContent = filtered.length > 200
+        ? filtered.slice(0, 200) + '\u2026'
+        : filtered;
       resultEl.title = 'Click to see full result';
       resultEl.addEventListener('click', (e) => {
         e.stopPropagation();
