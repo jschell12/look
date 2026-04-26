@@ -119,6 +119,11 @@ func buildAICommand(cliName, prompt string) *exec.Cmd {
 	}
 }
 
+func shouldAutoMarkDone(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(normalized, "mark as done")
+}
+
 // resolveAICli returns the CLI to use: task setting > local repo override > global default.
 func resolveAICli(cfg Config, m *taskMeta) string {
 	// Task-level setting from sender takes priority
@@ -466,6 +471,12 @@ func runWorker(cfg Config, m *taskMeta, taskID, taskDir string) {
 	aqScript := filepath.Join(cfg.AQScriptsDir, "agent-queue")
 	amScript := filepath.Join(cfg.AQScriptsDir, "agent-merge")
 
+	if shouldAutoMarkDone(m.Message) {
+		logf("  [%s] Auto-completing task from message instruction", taskID)
+		markDone(m, metaFile, taskID, "Marked done from task instruction.")
+		return
+	}
+
 	// Clone via agent-queue clone for isolated workspace
 	sessionID := fmt.Sprintf("xmuggle-%s", taskID)
 	_ = os.MkdirAll(workDir, 0755)
@@ -517,6 +528,12 @@ func runWorker(cfg Config, m *taskMeta, taskID, taskDir string) {
 	if len(imgPaths) == 0 && len(textContent) == 0 && m.Message == "" {
 		logf("  [%s] No content", taskID)
 		markError(m, metaFile, taskID, "No content found in task")
+		return
+	}
+
+	if shouldAutoMarkDone(strings.Join(textContent, "\n")) {
+		logf("  [%s] Auto-completing task from attachment instruction", taskID)
+		markDone(m, metaFile, taskID, "Marked done from task attachment instruction.")
 		return
 	}
 
