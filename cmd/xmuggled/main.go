@@ -190,11 +190,46 @@ func gitEnv() []string {
 }
 
 func runGit(dir string, args ...string) (string, error) {
+	// Recover once from stale .git/index.lock files left behind by crashed git
+	// processes. This keeps queue sync and post-task pulls from getting stuck.
+	cleanupStaleGitIndexLock(dir)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = gitEnv()
 	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
+	trimmed := strings.TrimSpace(string(out))
+	if err != nil && isIndexLockError(trimmed) && cleanupStaleGitIndexLock(dir) {
+		retry := exec.Command("git", args...)
+		retry.Dir = dir
+		retry.Env = gitEnv()
+		out, err = retry.CombinedOutput()
+		trimmed = strings.TrimSpace(string(out))
+	}
+	return trimmed, err
+}
+
+func isIndexLockError(out string) bool {
+	return strings.Contains(out, "index.lock") && strings.Contains(out, "File exists")
+}
+
+func cleanupStaleGitIndexLock(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	lockFile := filepath.Join(dir, ".git", "index.lock")
+	info, err := os.Stat(lockFile)
+	if err != nil {
+		return false
+	}
+	// Avoid touching a lock that may still be in active use.
+	if time.Since(info.ModTime()) < 2*time.Minute {
+		return false
+	}
+	if err := os.Remove(lockFile); err != nil {
+		return false
+	}
+	logf("Removed stale git lock: %s", lockFile)
+	return true
 }
 
 func projectToURL(project string) string {
