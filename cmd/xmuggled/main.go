@@ -932,20 +932,12 @@ func runPostTaskCommands(cfg Config, project, taskID string) {
 		return
 	}
 
-	// Fallback: run in detached bash (no tmux)
+	// Run post-commands in detached bash (no tmux)
 	debug("  [%s] Post-task: no tmux session, using detached bash", taskID)
 
 	if _, err := os.Stat(rc.Path); err != nil {
 		warn("  [%s] Post-task: local path %s not found", taskID, rc.Path)
 		return
-	}
-
-	killRepoProcesses(rc.Path, taskID)
-	killPostCmdProcs(rc.Path, taskID)
-
-	logf("  [%s] Post-task: git pull --rebase in %s", taskID, rc.Path)
-	if out, err := runGit(rc.Path, "pull", "--rebase"); err != nil {
-		warn("  [%s] Post-task: git pull failed: %s", taskID, out)
 	}
 
 	script := strings.Join(rc.PostCommands, " && ")
