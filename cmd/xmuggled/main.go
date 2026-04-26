@@ -852,18 +852,18 @@ func runPostTaskCommands(cfg Config, project, taskID string) {
 		}
 	}
 
-	// Signal the xmuggle Electron app to reload its UI
-	reloadXmuggleUI(taskID)
+	// Signal running Electron apps to reload their UI
+	reloadApp(taskID, "xmuggle", 24816)
+	reloadApp(taskID, "ai-enhance", 24817)
 }
 
-func reloadXmuggleUI(taskID string) {
-	resp, err := http.Post("http://localhost:24816/reload", "application/json", nil)
+func reloadApp(taskID, name string, port int) {
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/reload", port), "application/json", nil)
 	if err != nil {
-		logf("  [%s] Post-task: UI reload skipped (app not running)", taskID)
-		return
+		return // app not running, skip silently
 	}
 	resp.Body.Close()
-	logf("  [%s] Post-task: UI reloaded", taskID)
+	logf("  [%s] Post-task: %s UI reloaded", taskID, name)
 }
 
 func markDone(m *taskMeta, metaFile, taskID, result string) {
