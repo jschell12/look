@@ -119,9 +119,14 @@ func buildAICommand(cliName, prompt string) *exec.Cmd {
 	}
 }
 
-// resolveAICli returns the CLI to use for a given project, checking per-repo override first.
-func resolveAICli(cfg Config, project string) string {
-	rc := findRepoConfig(cfg, project)
+// resolveAICli returns the CLI to use: task setting > local repo override > global default.
+func resolveAICli(cfg Config, m *taskMeta) string {
+	// Task-level setting from sender takes priority
+	if m.AICli != "" {
+		return m.AICli
+	}
+	// Local per-repo override
+	rc := findRepoConfig(cfg, m.Project)
 	if rc != nil && rc.AICli != "" {
 		return rc.AICli
 	}
@@ -208,6 +213,7 @@ type taskMeta struct {
 	From        string   `json:"from"`
 	Timestamp   string   `json:"timestamp"`
 	Status      string   `json:"status"`
+	AICli       string   `json:"aiCli,omitempty"`
 	ProcessedBy string   `json:"processedBy,omitempty"`
 	Result      string   `json:"result,omitempty"`
 	DoneAt      string   `json:"doneAt,omitempty"`
@@ -495,7 +501,7 @@ func runWorker(cfg Config, m *taskMeta, taskID, taskDir string) {
 	prompt := strings.Join(promptParts, "\n\n")
 
 	// Spawn AI CLI — stream output and log filtered lines to daemon log
-	aiCli := resolveAICli(cfg, m.Project)
+	aiCli := resolveAICli(cfg, m)
 	logf("  [%s] Spawning %s on branch %s", taskID, aiCli, branch)
 	claudeCmd := buildAICommand(aiCli, prompt)
 	claudeCmd.Dir = cloneDir

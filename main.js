@@ -274,6 +274,15 @@ function queuePush(imagePaths, projectPath, message) {
 
   const project = getProjectSlug(projectPath);
 
+  // Look up AI CLI from daemon config for this project
+  let aiCli = '';
+  try {
+    const daemonCfg = JSON.parse(fs.readFileSync(path.join(XMUGGLE_DIR, 'daemon.json'), 'utf8'));
+    const projectName = path.basename(projectPath);
+    const repo = (daemonCfg.repos || []).find(r => path.basename(r.path) === projectName);
+    aiCli = (repo && repo.aiCli) || daemonCfg.aiCli || '';
+  } catch {}
+
   fs.writeFileSync(path.join(taskDir, 'meta.json'), JSON.stringify({
     filenames,
     project,
@@ -281,6 +290,7 @@ function queuePush(imagePaths, projectPath, message) {
     from: os.hostname(),
     timestamp: new Date().toISOString(),
     status: 'pending',
+    aiCli: aiCli || undefined,
   }, null, 2) + '\n');
 
   execSync('git add -A', { cwd: queueDir, stdio: 'pipe' });
