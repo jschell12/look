@@ -494,11 +494,9 @@ func runWorker(cfg Config, m *taskMeta, taskID, taskDir string) {
 	}
 	prompt := strings.Join(promptParts, "\n\n")
 
-	// Spawn Claude — stream output and log filtered lines to daemon log
-	logf("  [%s] Spawning claude on branch %s", taskID, branch)
-
+	// Spawn AI CLI — stream output and log filtered lines to daemon log
 	aiCli := resolveAICli(cfg, m.Project)
-	logf("  [%s] Using AI CLI: %s", taskID, aiCli)
+	logf("  [%s] Spawning %s on branch %s", taskID, aiCli, branch)
 	claudeCmd := buildAICommand(aiCli, prompt)
 	claudeCmd.Dir = cloneDir
 	claudeCmd.Env = gitEnv()
@@ -518,6 +516,11 @@ func runWorker(cfg Config, m *taskMeta, taskID, taskDir string) {
 		// Parse and log readable content
 		var msg map[string]any
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			// Not JSON — log plain text lines (cursor may output differently)
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				logf("  [%s] %s", taskID, trimmed)
+			}
 			continue
 		}
 		if msg["type"] == "assistant" {
